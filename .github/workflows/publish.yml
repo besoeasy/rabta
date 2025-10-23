@@ -1,0 +1,266 @@
+name: publish
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  checks:
+    uses: ./.github/workflows/checks.yml
+
+  prepare:
+    needs: checks
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        id: version
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)"
+          if [ -z "$VERSION" ]; then
+            echo "::error::could not read version from Cargo.toml"
+            exit 1
+          fi
+          TAG="$VERSION"
+          if ! printf '%s' "$TAG" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::version '$TAG' in Cargo.toml must look like X.Y.Z"
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::tag '$TAG' already exists; bump the version in Cargo.toml"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Releasing $TAG from $GITHUB_SHA"
+
+      - name: Build release notes from recent commits
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          PREV="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+          {
+            echo "## Changes"
+            echo
+            if [ -n "$PREV" ]; then
+              echo "Commits since \`$PREV\`:"
+              echo
+              git log "$PREV..HEAD" --no-merges \
+                --pretty=format:"- %s ([%h](https://github.com/${GITHUB_REPOSITORY}/commit/%H))"
+            else
+              echo "Recent commits:"
+              echo
+              git log -20 --no-merges \
+                --pretty=format:"- %s ([%h](https://github.com/${GITHUB_REPOSITORY}/commit/%H))"
+            fi
+            echo
+            echo
+            echo "## Container image"
+            echo
+            echo '```'
+            echo "docker pull ${REGISTRY}/${IMAGE_NAME}:${TAG}"
+            echo '```'
+            echo
+            echo "Also published as \`${IMAGE_NAME}:latest\`."
+            echo
+            echo "## Binaries"
+            echo
+            echo "Static Linux binaries (musl) for \`amd64\` and \`arm64\` are attached."
+            echo
+            echo "Quick install:"
+            echo '```bash'
+            echo "# amd64"
+            echo "curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/rabta-linux-amd64 -o rabta"
+            echo "chmod +x rabta"
+            echo
+            echo "# arm64"
+            echo "curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/rabta-linux-arm64 -o rabta"
+            echo "chmod +x rabta"
+            echo '```'
+            echo
+            echo "Verify with \`sha256sum -c SHA256SUMS\`."
+          } > NOTES.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: NOTES.md
+          if-no-files-found: error
+
+  binaries:
+    name: linux-${{ matrix.arch }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            target: aarch64-unknown-linux-musl
+    env:
+      TARGET: ${{ matrix.target }}
+      ARCH: ${{ matrix.arch }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      CC: musl-gcc
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+      CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install musl toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq musl-tools
+
+      - name: Add Rust target
+        run: rustup target add "$TARGET"
+
+      - name: Build binary
+        run: cargo build --release --locked --target "$TARGET"
+
+      - name: Stage binary
+        run: |
+          set -euo pipefail
+          BIN="rabta-linux-${ARCH}"
+          cp "target/${TARGET}/release/rabta" "$BIN"
+          chmod +x "$BIN"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-linux-${{ matrix.arch }}
+          path: rabta-linux-${{ matrix.arch }}
+          if-no-files-found: error
+
+  docker:
+    name: docker-${{ matrix.arch }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+            platform: linux/amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            platform: linux/arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.platform }}
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=docker-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=docker-${{ matrix.arch }}
+          provenance: false
+
+      - name: Record digest
+        run: |
+          set -euo pipefail
+          mkdir -p digests
+          echo "${{ steps.build.outputs.digest }}" > "digests/${{ matrix.arch }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: digests/${{ matrix.arch }}
+          if-no-files-found: error
+
+  docker-merge:
+    name: docker-merge
+    needs: [prepare, docker]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          path: digests
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge platform manifests
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          AMD64="$REGISTRY/$IMAGE_NAME@$(cat digests/amd64)"
+          ARM64="$REGISTRY/$IMAGE_NAME@$(cat digests/arm64)"
+          docker buildx imagetools create \
+            --tag "$REGISTRY/$IMAGE_NAME:$TAG" \
+            --tag "$REGISTRY/$IMAGE_NAME:latest" \
+            "$AMD64" "$ARM64"
+          docker buildx imagetools inspect "$REGISTRY/$IMAGE_NAME:$TAG"
+
+  release:
+    name: release
+    needs: [prepare, binaries, docker-merge]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Combine checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum rabta-linux-amd64 rabta-linux-arm64 > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --notes-file dist/NOTES.md \
+            dist/rabta-linux-amd64 dist/rabta-linux-arm64 dist/SHA256SUMS

@@ -1,0 +1,5 @@
+# Rust build output
+/target/
+
+# Local relay data (`DATA=./data` in the quick start): SQLite DB, blobs, tmp
+/data/
