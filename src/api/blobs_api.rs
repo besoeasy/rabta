@@ -6,8 +6,7 @@ use axum::Json;
 use serde_json::json;
 
 use crate::error::{ApiError, ApiResult};
-use crate::store::blobs::{self, Abort, BlobInsertResult, BlobSink, Staged};
-use crate::store::reaper;
+use crate::store::blobs::{self, Abort, BlobSink, Install, Staged};
 use super::events::run;
 use super::AppState;
 
@@ -60,7 +59,10 @@ async fn put_inner(n: AppState, name: String, req: Request<Body>) -> ApiResult<R
                     };
                 }
             }
-            Some(Err(_)) => return Err(ApiError::bad_json("body stream error")),
+            Some(Err(_)) => {
+                sink.discard();
+                return Err(ApiError::bad_json("body stream error"));
+            }
             None => break,
         }
     }
@@ -79,47 +81,23 @@ async fn put_inner(n: AppState, name: String, req: Request<Body>) -> ApiResult<R
 /// Common finalize for both blob doors: one accept-or-refuse transaction,
 /// then materialize the file. Paths: public raw `PUT` + peer `POST /sync/blobs`.
 pub async fn respond_stored(n: &AppState, staged: Staged) -> ApiResult<Response> {
-    let cfg = n.cfg.clone();
-    let hash = staged.hash;
+    let hash_hex = staged.hash_hex.clone();
     let size = staged.size;
-    let now = reaper::now();
-    let dir = cfg.data_dir.clone();
 
-    let fresh: bool = n
-        .db
-        .write(move |c: &Connection| -> ApiResult<bool> {
-            let (ev, _bl) = crate::db::live_bytes(c);
-            if (ev + size as i64) as u64 > cfg.watermark_bytes {
-                // evict once for the remaining head-room, then refuse if still full
-                reaper::evict_pass(c, &cfg);
-                let (ev2, _bl2) = crate::db::live_bytes(c);
-                if (ev2 + size as i64) as u64 > cfg.watermark_bytes {
-                    return Err(ApiError::at_watermark());
-                }
-            }
-            let insert = blobs::insert_blob_row(c, &hash, size, now, cfg.watermark_bytes)
-                .map_err(|e| ApiError::internal(format!("blob row: {e}")))?;
-            // mark ever_attached when live referrers already exist (bytes ride parenthood)
-            if insert != BlobInsertResult::WatermarkFull {
-                c.execute(
-                    "UPDATE blobs SET ever_attached=1 WHERE hash=?1 AND EXISTS(SELECT 1 FROM refs WHERE blob_hash=?1)",
-                    [&hash],
-                )
-                .map_err(ApiError::from)?;
-            }
-            Ok(insert == BlobInsertResult::Inserted)
-        })
-        .await?;
+    let outcome = blobs::install_staged(&n.db, &n.cfg, staged)
+        .await
+        .map_err(|e| ApiError::internal(format!("blob row: {e}")))?;
 
-    if let Err(e) = blobs::materialize(&dir, &staged) {
-        tracing::error!("materialize {}: {e}", staged.hash_hex);
+    if outcome == Install::Refused {
+        // No row was committed: answer the upload as refused and leave no file.
+        return Err(ApiError::at_watermark());
     }
 
-    let status = if fresh { StatusCode::CREATED } else { StatusCode::OK };
+    let status = if outcome == Install::Fresh { StatusCode::CREATED } else { StatusCode::OK };
     let body = json!({
-        "hash": staged.hash_hex,
-        "size": staged.size,
-        "url": format!("/blobs/{}", staged.hash_hex),
+        "hash": hash_hex,
+        "size": size,
+        "url": format!("/blobs/{hash_hex}"),
     });
     Ok((status, Json(body)).into_response())
 }

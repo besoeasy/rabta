@@ -52,7 +52,7 @@ pub async fn pull_blob(n: &AppState, peer: &reqwest::Url, hash_hex: &str) -> boo
     }
     matches!(
         crate::store::blobs::install_staged(&n.db, &n.cfg, staged).await,
-        Ok(_)
+        Ok(crate::store::blobs::Install::Fresh | crate::store::blobs::Install::Deduped)
     )
 }
 

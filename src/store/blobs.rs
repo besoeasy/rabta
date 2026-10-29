@@ -53,6 +53,13 @@ pub struct Staged {
     pub path: PathBuf, // still temp; caller materializes after commit
 }
 
+impl Staged {
+    /// Drop the staged temp file when the row was refused or the commit failed.
+    pub fn discard(self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 impl BlobSink {
     pub fn start(data_dir: &Path, live_bytes_start: i64, watermark: u64, max_single: u64) -> ApiResult<BlobSink> {
         let path = tmp_dir(data_dir).join(format!(
@@ -101,6 +108,7 @@ impl BlobSink {
     pub fn finish(self) -> Result<Staged, Abort> {
         let mut me = self;
         if let Err(e) = me.take_file().sync_all() {
+            let _ = std::fs::remove_file(&me.path);
             return Err(Abort::Io(e.to_string()));
         }
         let hash: [u8; 32] = me.hasher.finalize().into();
@@ -190,7 +198,7 @@ pub async fn install_staged(
     let size = staged.size;
     let now = crate::store::reaper::now();
 
-    let outcome = db
+    let outcome = match db
         .write(move |c: &rusqlite::Connection| -> rusqlite::Result<Install> {
             let (ev, _bl) = crate::db::live_bytes(c);
             if (ev + size as i64) as u64 > water {
@@ -210,7 +218,15 @@ pub async fn install_staged(
             )?;
             Ok(if r == BlobInsertResult::Inserted { Install::Fresh } else { Install::Deduped })
         })
-        .await?;
+        .await
+    {
+        Ok(outcome) => outcome,
+        Err(e) => {
+            // The row was not committed: never leave the temp file behind.
+            staged.discard();
+            return Err(e);
+        }
+    };
 
     match outcome {
         Install::Fresh => {
@@ -219,10 +235,13 @@ pub async fn install_staged(
             }
         }
         Install::Deduped => {
-            let _ = std::fs::remove_file(&staged.path);
+            // Existing wins, but if its file vanished the staged bytes heal it.
+            if let Err(e) = materialize(&dir, &staged) {
+                tracing::error!("materialize {}: {e}", staged.hash_hex);
+            }
         }
         Install::Refused => {
-            let _ = std::fs::remove_file(&staged.path);
+            staged.discard();
         }
     }
     Ok(outcome)
@@ -368,4 +387,59 @@ pub async fn boot_hygiene(db: &Db, data_dir: PathBuf) -> rusqlite::Result<()> {
         Ok(())
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+        let dir = std::env::temp_dir().join(format!("rabta-{tag}-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn watermark_refusal_discards_staged_file() {
+        let dir = temp_dir("blob-refusal");
+        init_dirs(&dir).unwrap();
+        let db = Db::open(&dir);
+        let cfg = Config {
+            port: 0,
+            data_dir: dir.clone(),
+            storage_max: 100,
+            storage_clamped: false,
+            storage_max_configured: 100,
+            max_single_blob: 10,
+            watermark_bytes: 5,
+            eviction_target_bytes: 4,
+            sse_subscriber_cap: 1,
+            sync_nodes: Vec::new(),
+            sync_interval: Duration::from_secs(60),
+        };
+
+        let path = tmp_dir(&dir).join("staged");
+        std::fs::write(&path, b"0123456789").unwrap();
+        let staged = Staged {
+            hash_hex: hex::encode([7u8; 32]),
+            hash: [7u8; 32],
+            size: 10,
+            path: path.clone(),
+        };
+
+        let outcome = install_staged(&db, &cfg, staged).await.unwrap();
+        assert_eq!(outcome, Install::Refused);
+        assert!(!path.exists(), "refused upload left its temp file behind");
+
+        let rows: i64 = db
+            .read(|c| c.query_row("SELECT COUNT(*) FROM blobs", [], |r| r.get(0)).unwrap())
+            .await;
+        assert_eq!(rows, 0);
+
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

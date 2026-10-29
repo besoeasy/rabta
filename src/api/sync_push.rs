@@ -50,7 +50,13 @@ async fn stream_body(n: &AppState, req: Request<Body>) -> ApiResult<Staged> {
     let mut stream = req.into_body().into_data_stream();
     use futures_util::StreamExt;
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|_| ApiError::bad_json("body stream error"))?;
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(_) => {
+                sink.discard();
+                return Err(ApiError::bad_json("body stream error"));
+            }
+        };
         if let Err(a) = sink.push(&chunk) {
             sink.discard();
             return Err(match a {
