@@ -143,8 +143,9 @@ pub fn materialize(data_dir: &Path, staged: &Staged) -> std::io::Result<bool> {
     std::fs::rename(&staged.path, &dest).map(|_| true)
 }
 
-/// One-transaction blob-row insert; idempotent by hash (dedupe by content).
-/// The final watermark re-check uses the authoritative counter table.
+/// Blob-row insert; idempotent by hash (dedupe by content). Must run inside
+/// the caller's transaction so the row and its counter move together. The
+/// final watermark re-check uses the authoritative counter table.
 pub fn insert_blob_row(
     c: &rusqlite::Connection,
     hash: &[u8; 32],
@@ -165,7 +166,7 @@ pub fn insert_blob_row(
         "INSERT INTO blobs(hash, size, stored_at, ever_attached, state) VALUES (?1, ?2, ?3, 0, 'live')",
         rusqlite::params![hash, size as i64, stored_at],
     )?;
-    crate::db::bump_counters(c, 0, size as i64);
+    crate::db::bump_counters(c, 0, size as i64)?;
     Ok(BlobInsertResult::Inserted)
 }
 
@@ -214,14 +215,16 @@ pub async fn install_staged(
                     return Ok(Install::Refused);
                 }
             }
-            let r = insert_blob_row(c, &hash, size, now, water)?;
+            let tx = c.unchecked_transaction()?;
+            let r = insert_blob_row(&tx, &hash, size, now, water)?;
             if r == BlobInsertResult::WatermarkFull {
-                return Ok(Install::Refused);
+                return Ok(Install::Refused); // tx drops → rollback
             }
-            let _ = c.execute(
+            tx.execute(
                 "UPDATE blobs SET ever_attached=1 WHERE hash=?1 AND EXISTS(SELECT 1 FROM refs WHERE blob_hash=?1)",
                 rusqlite::params![&hash],
             )?;
+            tx.commit()?;
             Ok(if r == BlobInsertResult::Inserted { Install::Fresh } else { Install::Deduped })
         })
         .await
@@ -272,7 +275,7 @@ pub fn delete_blob(c: &rusqlite::Connection, hash: &[u8; 32], data_dir: &Path) -
         return Ok(0);
     }
     c.execute("DELETE FROM refs WHERE blob_hash = ?1", [hash])?;
-    crate::db::bump_counters(c, 0, -size);
+    crate::db::bump_counters(c, 0, -size)?;
     let _ = std::fs::remove_file(blob_path(data_dir, &hex::encode(hash)));
     Ok(size)
 }
@@ -289,7 +292,7 @@ pub fn delete_events(c: &rusqlite::Connection, ids: &[[u8; 32]], data_dir: &Path
         }
         c.execute("DELETE FROM refs WHERE event_id = ?1", [id])?;
         c.execute("DELETE FROM labels WHERE event_id = ?1", [id])?;
-        crate::db::bump_counters(c, -size, 0);
+        crate::db::bump_counters(c, -size, 0)?;
         freed += size;
     }
     let _ = data_dir; // events carry no files

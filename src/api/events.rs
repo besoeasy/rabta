@@ -88,15 +88,15 @@ async fn insert_event_with_blob(n: &AppState, ev: &events::ParsedEvent) -> ApiRe
     let out: ApiResult<bool> = n
         .db
         .write(move |c: &rusqlite::Connection| -> ApiResult<bool> {
-            reaper::pressure_check(c, &cfg, ev2.size as u64)?;
-            let inserted = events::insert_event(c, &ev2)
-                .map_err(|e| ApiError::internal(format!("event insert: {e}")))?;
-            if inserted {
-                if let Some(hash) = &ev2.blob {
-                    crate::store::blobs::attach_ref(c, &ev2.id, hash)
-                        .map_err(|e| ApiError::internal(format!("refs insert: {e}")))?;
-                }
+            // Duplicates add no bytes: check first so a retry cannot evict
+            // unrelated events for a write that will not consume space.
+            let exists = events::event_exists(c, &ev2.id)
+                .map_err(|e| ApiError::internal(format!("event lookup: {e}")))?;
+            if !exists {
+                reaper::pressure_check(c, &cfg, ev2.size as u64)?;
             }
+            let inserted = events::insert_event_with_ref(c, &ev2)
+                .map_err(|e| ApiError::internal(format!("event insert: {e}")))?;
             Ok(inserted)
         })
         .await;
@@ -336,7 +336,7 @@ impl Drop for SseGuard {
 /// One live row, broadcast to every SSE subscriber. Each subscriber applies its
 /// own filters in memory, so one shared feed serves every subscriber.
 struct SseRow {
-    rowid: i64,
+    seq: i64,
     collection: String,
     owner: Vec<u8>,
     labels: Vec<String>,
@@ -375,7 +375,7 @@ async fn ensure_sse_feed(
 
     let cursor = db
         .read(|c: &Connection| {
-            c.query_row("SELECT COALESCE(MAX(rowid),0) FROM events", [], |r| r.get(0))
+            c.query_row("SELECT COALESCE(MAX(seq),0) FROM events", [], |r| r.get(0))
                 .unwrap_or(0)
         })
         .await;
@@ -404,7 +404,7 @@ async fn sse_feed_loop(
                 .unwrap_or_default();
             let full = rows.len() as i64 == SSE_FEED_BATCH;
             if let Some(last) = rows.last() {
-                cursor = last.rowid;
+                cursor = last.seq;
             }
             for row in rows {
                 let _ = tx.send(std::sync::Arc::new(row));
@@ -442,18 +442,18 @@ async fn retire_sse_feed(path: &std::path::Path, tx: &SseFeed) -> bool {
     false
 }
 
-/// Read rows in rowid order without an expiry predicate: the cursor must move
-/// past dead rows too, otherwise they would be rescanned on every feed tick.
+/// Read rows in sequence order without an expiry predicate: the cursor must
+/// move past dead rows too, otherwise they would be rescanned on every feed tick.
 fn read_sse_rows(c: &Connection, after: i64, limit: i64) -> rusqlite::Result<Vec<SseRow>> {
     let mut stmt = c.prepare(
-        "SELECT rowid, collection, owner, labels, expires_at, state, data
-         FROM events WHERE rowid > ?1 ORDER BY rowid ASC LIMIT ?2",
+        "SELECT seq, collection, owner, labels, expires_at, state, data
+         FROM events WHERE seq > ?1 ORDER BY seq ASC LIMIT ?2",
     )?;
     let mut rows = stmt.query(rusqlite::params![after, limit])?;
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
         out.push(SseRow {
-            rowid: r.get(0)?,
+            seq: r.get(0)?,
             collection: r.get(1)?,
             owner: r.get(2)?,
             labels: serde_json::from_str(&r.get::<_, String>(3)?).unwrap_or_default(),
@@ -485,14 +485,14 @@ fn sse_matches(filters: &ListFilters, row: &SseRow) -> bool {
     true
 }
 
-fn sse_frame(rowid: i64, served: &[u8]) -> axum::body::Bytes {
+fn sse_frame(seq: i64, served: &[u8]) -> axum::body::Bytes {
     axum::body::Bytes::from(format!(
-        "id: {rowid}\nevent: message\ndata: {}\n\n",
+        "id: {seq}\nevent: message\ndata: {}\n\n",
         String::from_utf8_lossy(served)
     ))
 }
 
-/// Fetch the filtered backlog in rowid order. The returned cursor is the
+/// Fetch the filtered backlog in sequence order. The returned cursor is the
 /// high-water mark, not just the last matching row, so missed filtered rows
 /// are never rescanned.
 async fn sse_catch_up(
@@ -515,7 +515,7 @@ async fn sse_catch_up(
                 let h_at = events::next_bind(&mut binds, events::SqlParam::I(hi));
                 let l_at = events::next_bind(&mut binds, events::SqlParam::I(200));
                 let sql = format!(
-                    "{pred} AND rowid > {r_at} AND rowid <= {h_at} ORDER BY rowid ASC LIMIT {l_at}"
+                    "{pred} AND seq > {r_at} AND seq <= {h_at} ORDER BY seq ASC LIMIT {l_at}"
                 );
                 events::run_list(c, &sql, &binds)
             })
@@ -532,11 +532,11 @@ async fn sse_catch_up(
         }
         let full = batch.len() == 200;
         for r in &batch {
-            if tx.send(Ok(sse_frame(r.rowid, &r.served))).await.is_err() {
+            if tx.send(Ok(sse_frame(r.seq, &r.served))).await.is_err() {
                 return Err(());
             }
         }
-        next = batch.last().map(|r| r.rowid).unwrap_or(next);
+        next = batch.last().map(|r| r.seq).unwrap_or(next);
         if !full {
             return Ok(to);
         }
@@ -577,21 +577,21 @@ async fn stream_inner(n: AppState, headers: HeaderMap, p: RawQ) -> ApiResult<Res
         let mut feed = ensure_sse_feed(&db).await;
         let high_water = db
             .read(|c: &Connection| {
-                c.query_row("SELECT COALESCE(MAX(rowid),0) FROM events", [], |r| r.get(0))
+                c.query_row("SELECT COALESCE(MAX(seq),0) FROM events", [], |r| r.get(0))
                     .unwrap_or(0)
             })
             .await;
 
-        // resume point: after the given rowid, else the newest row (future tail)
-        let mut next_rowid = match last_event_id {
+        // resume point: after the given sequence, else the newest row (future tail)
+        let mut next_seq = match last_event_id {
             Some(x) => x,
             None => high_water,
         };
-        tracing::debug!(sse_start = next_rowid, high_water, "sse worker attached");
+        tracing::debug!(sse_start = next_seq, high_water, "sse worker attached");
 
-        if next_rowid < high_water {
-            match sse_catch_up(&db, &filters, next_rowid, high_water, &tx).await {
-                Ok(next) => next_rowid = next,
+        if next_seq < high_water {
+            match sse_catch_up(&db, &filters, next_seq, high_water, &tx).await {
+                Ok(next) => next_seq = next,
                 Err(()) => return, // client went away or DB failed
             }
         }
@@ -607,17 +607,17 @@ async fn stream_inner(n: AppState, headers: HeaderMap, p: RawQ) -> ApiResult<Res
                 received = feed.recv() => {
                     match received {
                         Ok(row) => {
-                            if row.rowid <= next_rowid {
+                            if row.seq <= next_seq {
                                 continue;
                             }
-                            next_rowid = row.rowid;
+                            next_seq = row.seq;
                             if row.state != "live"
                                 || row.expires_at <= reaper::now()
                                 || !sse_matches(&filters, &row)
                             {
                                 continue;
                             }
-                            if tx.send(Ok(sse_frame(row.rowid, &row.served))).await.is_err() {
+                            if tx.send(Ok(sse_frame(row.seq, &row.served))).await.is_err() {
                                 return;
                             }
                         }
@@ -626,16 +626,16 @@ async fn stream_inner(n: AppState, headers: HeaderMap, p: RawQ) -> ApiResult<Res
                             let current = db
                                 .read(|c: &Connection| {
                                     c.query_row(
-                                        "SELECT COALESCE(MAX(rowid),0) FROM events",
+                                        "SELECT COALESCE(MAX(seq),0) FROM events",
                                         [],
                                         |r| r.get(0),
                                     )
                                     .unwrap_or(0)
                                 })
                                 .await;
-                            if current > next_rowid {
-                                match sse_catch_up(&db, &filters, next_rowid, current, &tx).await {
-                                    Ok(next) => next_rowid = next,
+                            if current > next_seq {
+                                match sse_catch_up(&db, &filters, next_seq, current, &tx).await {
+                                    Ok(next) => next_seq = next,
                                     Err(()) => return,
                                 }
                             }
@@ -756,10 +756,11 @@ mod tests {
         let served = br#"{"collection":"chat","data":{"n":1}}"#.to_vec();
         let size = served.len() as i64;
         n.db.write(move |c: &Connection| {
+            let seq = crate::db::next_event_seq(c).unwrap();
             c.execute(
-                "INSERT INTO events(id,owner,collection,created_at,expires_at,data,labels,size,state)
-                 VALUES (?1,?2,'chat',?3,?4,?5,'[]',?6,'live')",
-                rusqlite::params![&[1u8; 32], &[9u8; 32], now - 1, now + 3600, &served, size],
+                "INSERT INTO events(id,seq,owner,collection,created_at,expires_at,data,labels,size,state)
+                 VALUES (?1,?2,?3,'chat',?4,?5,?6,'[]',?7,'live')",
+                rusqlite::params![&[1u8; 32], seq, &[9u8; 32], now - 1, now + 3600, &served, size],
             )
             .unwrap();
         })
@@ -779,7 +780,7 @@ mod tests {
             .await
             .expect("feed did not wake on event signal")
             .expect("feed closed before delivering the row");
-        assert_eq!(row.rowid, 1);
+        assert_eq!(row.seq, 1);
         assert_eq!(row.collection, "chat");
         assert_eq!(row.state, "live");
 
@@ -840,7 +841,7 @@ mod tests {
     #[test]
     fn shared_feed_filters_in_memory() {
         let row = SseRow {
-            rowid: 9,
+            seq: 9,
             collection: "chat".into(),
             owner: vec![0x11; 32],
             labels: vec!["team".into(), "urgent".into()],

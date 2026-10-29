@@ -68,24 +68,24 @@ pub async fn push_i_hold_events(n: &AppState, peer: &reqwest::Url, reply: &Value
     };
     let their = Bloom { bits, cells };
 
-    let mut last_rowid = 0i64;
+    let mut last_seq = 0i64;
     loop {
-        let last = last_rowid;
+        let last = last_seq;
         let page: Vec<(i64, Vec<u8>, Vec<u8>)> = n
             .db
             .read(move |c: &rusqlite::Connection| {
                 let mut stmt = c
                     .prepare(
-                        "SELECT rowid, id, data FROM events WHERE state='live' AND rowid > ?1 ORDER BY rowid ASC LIMIT ?2",
+                        "SELECT seq, id, data FROM events WHERE state='live' AND seq > ?1 ORDER BY seq ASC LIMIT ?2",
                     )
                     .ok()?;
                 let mut rows = stmt.query([last, PAGE]).ok()?;
                 let mut out = Vec::new();
                 while let Ok(Some(r)) = rows.next() {
-                    let rowid: i64 = r.get(0).unwrap_or(0);
+                    let seq: i64 = r.get(0).unwrap_or(0);
                     let id: Vec<u8> = r.get(1).unwrap_or_default();
                     let data: Vec<u8> = r.get(2).unwrap_or_default();
-                    out.push((rowid, id, data));
+                    out.push((seq, id, data));
                 }
                 Some(out)
             })
@@ -96,8 +96,8 @@ pub async fn push_i_hold_events(n: &AppState, peer: &reqwest::Url, reply: &Value
         }
 
         let mut batch: Vec<Value> = Vec::new();
-        for (rowid, id, data) in page {
-            last_rowid = rowid;
+        for (seq, id, data) in page {
+            last_seq = seq;
             if id.len() != 32 {
                 continue;
             }
@@ -119,7 +119,7 @@ pub async fn push_i_hold_events(n: &AppState, peer: &reqwest::Url, reply: &Value
                 .send()
                 .await;
         }
-        if last_rowid == last {
+        if last_seq == last {
             break;
         }
     }

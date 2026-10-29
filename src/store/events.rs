@@ -206,20 +206,18 @@ fn get_str<'a>(obj: &'a serde_json::Map<String, Value>, key: &str) -> Option<&'a
 /// Returns `true` when a new row was written. The blob row + `refs` junction
 /// are handled by the caller in the same transaction when this returns true.
 pub fn insert_event(c: &rusqlite::Connection, ev: &ParsedEvent) -> rusqlite::Result<bool> {
-    let exists: bool = c
-        .query_row("SELECT 1 FROM events WHERE id = ?1", [&ev.id], |r| r.get::<_, i64>(0))
-        .map(|_| true)
-        .unwrap_or(false);
-    if exists {
+    if event_exists(c, &ev.id)? {
         return Ok(false);
     }
 
+    let seq = crate::db::next_event_seq(c)?;
     let labels_json = serde_json::to_string(&ev.labels).unwrap();
     c.execute(
-        "INSERT INTO events(id, owner, collection, created_at, expires_at, data, labels, size, mime, state)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'application/json', 'live')",
+        "INSERT INTO events(id, seq, owner, collection, created_at, expires_at, data, labels, size, mime, state)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'application/json', 'live')",
         rusqlite::params![
             &ev.id[..],
+            seq,
             &ev.owner[..],
             ev.collection,
             ev.created_at,
@@ -235,8 +233,28 @@ pub fn insert_event(c: &rusqlite::Connection, ev: &ParsedEvent) -> rusqlite::Res
             rusqlite::params![&ev.id[..], l],
         )?;
     }
-    crate::db::bump_counters(c, ev.size as i64, 0);
+    crate::db::bump_counters(c, ev.size as i64, 0)?;
     Ok(true)
+}
+
+pub fn event_exists(c: &rusqlite::Connection, id: &[u8; 32]) -> rusqlite::Result<bool> {
+    c.query_row("SELECT EXISTS(SELECT 1 FROM events WHERE id = ?1)", [id], |r| {
+        r.get::<_, i64>(0)
+    })
+    .map(|n| n != 0)
+}
+
+/// Event row + labels + counters + blob ref in ONE transaction. Re-delivery
+/// of an already-stored event still repairs a missing refs row, so a partial
+/// pre-transaction insert cannot leave the blob unparented forever.
+pub fn insert_event_with_ref(c: &rusqlite::Connection, ev: &ParsedEvent) -> rusqlite::Result<bool> {
+    let tx = c.unchecked_transaction()?;
+    let inserted = insert_event(&tx, ev)?;
+    if let Some(blob) = ev.blob.as_ref() {
+        crate::store::blobs::attach_ref(&tx, &ev.id, blob)?;
+    }
+    tx.commit()?;
+    Ok(inserted)
 }
 
 // ---------------------------------------------------------------------------
@@ -278,7 +296,7 @@ pub struct ListFilters {
 #[derive(Debug, Clone)]
 pub struct ListedRow {
     pub id: [u8; 32],
-    pub rowid: i64,
+    pub seq: i64,
     pub created_at: i64,
     pub served: Vec<u8>,
 }
@@ -357,28 +375,90 @@ pub fn list_sql(
     pred
 }
 
-/// Run a SELECT over (rowid, id, created_at, data); `sql` = predicate + finishers.
+/// Run a SELECT over (seq, id, created_at, data); `sql` = predicate + finishers.
 pub fn run_list(
     c: &rusqlite::Connection,
     sql: &str,
     binds: &[SqlParam],
 ) -> rusqlite::Result<Vec<ListedRow>> {
-    let full = format!("SELECT rowid, id, created_at, data FROM events WHERE {sql}");
+    let full = format!("SELECT seq, id, created_at, data FROM events WHERE {sql}");
     let refs: Vec<&dyn rusqlite::ToSql> = binds.iter().map(|b| b as &dyn rusqlite::ToSql).collect();
     let mut stmt = c.prepare(&full)?;
     let mut rows = stmt.query(refs.as_slice())?;
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
         let id_raw: Vec<u8> = r.get(1)?;
-        let rowid: i64 = r.get(0)?;
+        let seq: i64 = r.get(0)?;
         let mut id = [0u8; 32];
         id.copy_from_slice(&id_raw);
         out.push(ListedRow {
             id,
-            rowid,
+            seq,
             created_at: r.get(2)?,
             served: r.get(3)?,
         });
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_event(id_byte: u8, blob: Option<[u8; 32]>) -> ParsedEvent {
+        ParsedEvent {
+            id_hex: format!("{id_byte:02x}").repeat(32),
+            id: [id_byte; 32],
+            owner: [7u8; 32],
+            collection: "test".into(),
+            created_at: 1,
+            expires_at: 9_999_999_999,
+            labels: vec!["team".into()],
+            blob,
+            blob_hex: blob.map(hex::encode),
+            served_bytes: br#"{"collection":"test"}"#.to_vec(),
+            size: 21,
+        }
+    }
+
+    #[test]
+    fn duplicate_reinsert_repairs_missing_refs() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        c.execute_batch(crate::db::SCHEMA).unwrap();
+
+        let ev = test_event(1, Some([9u8; 32]));
+        assert!(insert_event_with_ref(&c, &ev).unwrap());
+        c.execute("DELETE FROM refs", []).unwrap();
+
+        assert!(!insert_event_with_ref(&c, &ev).unwrap(), "duplicate wrote a second row");
+        let rows: i64 = c.query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0)).unwrap();
+        let refs: i64 = c.query_row("SELECT COUNT(*) FROM refs", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 1);
+        assert_eq!(refs, 1, "duplicate did not repair the missing ref");
+        assert_eq!(crate::db::live_bytes(&c).0, ev.size as i64);
+    }
+
+    #[test]
+    fn event_row_and_counters_roll_back_when_labels_fail() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        c.execute_batch(crate::db::SCHEMA).unwrap();
+        c.execute_batch(
+            "CREATE TRIGGER fail_label BEFORE INSERT ON labels
+             BEGIN SELECT RAISE(ABORT, 'boom'); END;",
+        )
+        .unwrap();
+
+        let ev = test_event(2, None);
+        assert!(insert_event_with_ref(&c, &ev).is_err());
+
+        let rows: i64 = c.query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 0, "partial event row survived a failed insert");
+        assert_eq!(crate::db::live_bytes(&c), (0, 0));
+        let seq: i64 = c
+            .query_row("SELECT COALESCE((SELECT v FROM counters WHERE k='event_seq'),0)", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(seq, 0, "sequence counter advanced on a rolled-back insert");
+    }
 }

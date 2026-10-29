@@ -41,7 +41,7 @@ pub struct PullParams {
     limit: Option<u32>,
 }
 
-// GET /sync/events?cursor=&limit= — fresh-join/catch-up pull (rowid-ordered).
+// GET /sync/events?cursor=&limit= — fresh-join/catch-up pull (seq-ordered).
 pub async fn pull_events(State(n): State<AppState>, Query(p): Query<PullParams>) -> Response {
     run(pull_inner(n, p).await)
 }
@@ -53,7 +53,7 @@ async fn pull_inner(n: AppState, p: PullParams) -> ApiResult<Response> {
         .db
         .read(move |c: &Conn| {
             let mut stmt = c
-                .prepare("SELECT rowid, id, created_at, data FROM events WHERE state='live' AND rowid > ?1 ORDER BY rowid ASC LIMIT ?2")
+                .prepare("SELECT seq, id, created_at, data FROM events WHERE state='live' AND seq > ?1 ORDER BY seq ASC LIMIT ?2")
                 .unwrap();
             let mut rows = stmt.query([cursor, limit as i64]).unwrap();
             let mut out = Vec::new();
@@ -63,7 +63,7 @@ async fn pull_inner(n: AppState, p: PullParams) -> ApiResult<Response> {
                 id.copy_from_slice(&id_raw);
                 let _ = &id;
                 out.push(crate::store::events::ListedRow {
-                    rowid: r.get(0).unwrap(),
+                    seq: r.get(0).unwrap(),
                     id,
                     created_at: r.get(2).unwrap(),
                     served: r.get(3).unwrap(),
@@ -73,7 +73,7 @@ async fn pull_inner(n: AppState, p: PullParams) -> ApiResult<Response> {
         })
         .await;
 
-    let next_cursor = if rows.len() == limit as usize { rows.last().map(|r| r.rowid) } else { None };
+    let next_cursor = if rows.len() == limit as usize { rows.last().map(|r| r.seq) } else { None };
     let items: Vec<serde_json::Value> = rows
         .iter()
         .filter_map(|r| serde_json::from_slice(&r.served).ok())

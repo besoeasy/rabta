@@ -32,7 +32,7 @@ pub async fn index(State(n): State<AppState>) -> Json<serde_json::Value> {
         routes["routes"]["POST /sync/events"] = json!("push event batch (normal validation)");
         routes["routes"]["POST /sync/blobs"] = json!("push blob bodies (normal caps)");
         routes["routes"]["GET /sync/events/{id}"] = json!("pull one event envelope");
-        routes["routes"]["GET /sync/events"] = json!("paged pull (rowid cursor)");
+        routes["routes"]["GET /sync/events"] = json!("paged pull (seq cursor)");
         routes["routes"]["GET /sync/blobs/{hash}"] = json!("pull one blob body");
     }
     Json(routes)

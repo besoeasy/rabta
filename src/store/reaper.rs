@@ -295,7 +295,7 @@ mod tests {
             )
             .unwrap();
         }
-        crate::db::bump_counters(c, size * count as i64, 0);
+        crate::db::bump_counters(c, size * count as i64, 0).unwrap();
     }
 
     /// Regression: at exactly the watermark a passive pass must do nothing,

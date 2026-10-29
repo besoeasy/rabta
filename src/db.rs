@@ -114,6 +114,7 @@ impl Db {
         configure_connection(&c);
         c.pragma_update(None, "journal_mode", "WAL").ok();
         c.execute_batch(SCHEMA).expect("schema init failed");
+        migrate(&c).expect("schema migration failed");
 
         // One writer + a reader pool. WAL lets readers run against a stable
         // snapshot while the writer commits; they never share its lock.
@@ -219,6 +220,7 @@ fn reconcile_counters(db: &Db) {
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS events (
   id          BLOB(32) PRIMARY KEY,   -- raw sha256 digest
+  seq         INTEGER NOT NULL DEFAULT 0, -- monotonic ingest sequence (cursors/SSE ids)
   owner       BLOB(32) NOT NULL,
   collection  TEXT    NOT NULL,
   created_at  INTEGER NOT NULL,
@@ -276,23 +278,67 @@ pub fn live_bytes(c: &Connection) -> (i64, i64) {
     (get("live_bytes_events"), get("live_bytes_blobs"))
 }
 
-pub fn bump_counters(c: &Connection, events_delta: i64, blobs_delta: i64) {
+/// One-time/incremental schema repair for databases created before `seq`.
+/// Backfill from rowid (the old cursor) and seed the counter to the high-water
+/// mark so no future row can reuse a sequence already handed to clients.
+fn migrate(c: &Connection) -> rusqlite::Result<()> {
+    let mut has_seq = false;
+    {
+        let mut stmt = c.prepare("PRAGMA table_info(events)")?;
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            let name: String = r.get(1)?;
+            if name == "seq" {
+                has_seq = true;
+            }
+        }
+    }
+    if !has_seq {
+        c.execute_batch("ALTER TABLE events ADD COLUMN seq INTEGER NOT NULL DEFAULT 0;")?;
+    }
+    c.execute("UPDATE events SET seq = rowid WHERE seq = 0", [])?;
+    c.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ev_seq ON events(seq) WHERE seq > 0",
+        [],
+    )?;
+    let max: i64 =
+        c.query_row("SELECT COALESCE(MAX(seq),0) FROM events", [], |r| r.get(0))?;
+    c.execute(
+        "INSERT INTO counters(k,v) VALUES('event_seq', ?1)
+         ON CONFLICT(k) DO UPDATE SET v = MAX(v, excluded.v)",
+        [max],
+    )?;
+    Ok(())
+}
+
+/// Allocate the next monotonic event sequence. Called inside the event insert
+/// transaction, so a rollback also rolls the counter back (no gaps within a
+/// committed stream, and never a value that could be reused after deletion).
+pub fn next_event_seq(c: &Connection) -> rusqlite::Result<i64> {
+    c.execute(
+        "INSERT INTO counters(k,v) VALUES('event_seq', 1)
+         ON CONFLICT(k) DO UPDATE SET v = v + 1",
+        [],
+    )?;
+    c.query_row("SELECT v FROM counters WHERE k = 'event_seq'", [], |r| r.get(0))
+}
+
+pub fn bump_counters(c: &Connection, events_delta: i64, blobs_delta: i64) -> rusqlite::Result<()> {
     if events_delta != 0 {
         c.execute(
             "INSERT INTO counters(k,v) VALUES('live_bytes_events', ?1)
              ON CONFLICT(k) DO UPDATE SET v = v + ?1",
             [events_delta],
-        )
-        .ok();
+        )?;
     }
     if blobs_delta != 0 {
         c.execute(
             "INSERT INTO counters(k,v) VALUES('live_bytes_blobs', ?1)
              ON CONFLICT(k) DO UPDATE SET v = v + ?1",
             [blobs_delta],
-        )
-        .ok();
+        )?;
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -322,6 +368,86 @@ mod tests {
         drop(writer);
 
         assert_eq!(read.expect("read blocked behind the writer"), 1);
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A pre-seq database (the previous release) must be upgraded in place:
+    /// every existing row gets seq = rowid and the counter starts at the max.
+    #[tokio::test]
+    async fn migrates_existing_events_to_monotonic_sequence() {
+        let dir = temp_dir("db-seq-migrate");
+        let path = dir.join("index.db");
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(
+                "CREATE TABLE events (
+                   id BLOB(32) PRIMARY KEY, owner BLOB(32) NOT NULL, collection TEXT NOT NULL,
+                   created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, data BLOB NOT NULL,
+                   labels TEXT NOT NULL, size INTEGER NOT NULL,
+                   mime TEXT NOT NULL DEFAULT 'application/json',
+                   state TEXT NOT NULL DEFAULT 'live'
+                 );",
+            )
+            .unwrap();
+            for i in 1..=2u8 {
+                c.execute(
+                    "INSERT INTO events(id,owner,collection,created_at,expires_at,data,labels,size)
+                     VALUES (?1,?2,'c',1,9999999999,x'7b7d','[]',2)",
+                    rusqlite::params![[i; 32], &[0u8; 32]],
+                )
+                .unwrap();
+            }
+        }
+
+        let db = Db::open(&dir);
+        let (seqs, counter) = db
+            .read(|c| {
+                let mut stmt = c.prepare("SELECT seq FROM events ORDER BY rowid").unwrap();
+                let seqs: Vec<i64> = stmt
+                    .query_map([], |r| r.get(0))
+                    .unwrap()
+                    .map(|r| r.unwrap())
+                    .collect();
+                let counter: i64 = c
+                    .query_row("SELECT v FROM counters WHERE k='event_seq'", [], |r| r.get(0))
+                    .unwrap();
+                (seqs, counter)
+            })
+            .await;
+        assert_eq!(seqs, vec![1, 2]);
+        assert_eq!(counter, 2);
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The old cursor was the implicit rowid; deleting the highest row made
+    /// SQLite reuse it. The sequence counter must never move backwards.
+    #[tokio::test]
+    async fn event_sequence_survives_deleting_the_highest_row() {
+        let dir = temp_dir("db-seq");
+        let db = Db::open(&dir);
+
+        let first = db
+            .write(|c| {
+                let seq = next_event_seq(c).unwrap();
+                c.execute(
+                    "INSERT INTO events(id,seq,owner,collection,created_at,expires_at,data,labels,size,state)
+                     VALUES (?1,?2,?3,'c',1,9999999999,x'7b7d','[]',2,'live')",
+                    rusqlite::params![[1u8; 32], seq, &[0u8; 32]],
+                )
+                .unwrap();
+                seq
+            })
+            .await;
+        db.write(|c| {
+            c.execute("DELETE FROM events", []).unwrap();
+        })
+        .await;
+        let second = db.write(|c| next_event_seq(c).unwrap()).await;
+
+        assert_eq!(first, 1);
+        assert_eq!(second, 2, "sequence reused after the highest row was deleted");
         drop(db);
         let _ = std::fs::remove_dir_all(&dir);
     }

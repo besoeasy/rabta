@@ -75,17 +75,19 @@ pub async fn store_envelope(n: &AppState, bytes: Vec<u8>) -> ApiResult<bool> {
     let now = reaper::now();
     let ev = events::parse_and_verify(&bytes, now)?;
     let ev2 = ev.clone();
+    let cfg = n.cfg.clone();
     let out: ApiResult<bool> = n
         .db
         .write(move |c: &Conn| -> ApiResult<bool> {
-            let ins = events::insert_event(c, &ev2)
-                .map_err(|e| ApiError::internal(format!("insert: {e}")))?;
-            if ins {
-                if let Some(b) = ev2.blob {
-                    crate::store::blobs::attach_ref(c, &ev2.id, &b)
-                        .map_err(|e| ApiError::internal(format!("refs: {e}")))?;
-                }
+            // Retries add no bytes: the duplicate check must run before
+            // eviction, otherwise sync ingress can evict data for nothing.
+            let exists = events::event_exists(c, &ev2.id)
+                .map_err(|e| ApiError::internal(format!("lookup: {e}")))?;
+            if !exists {
+                reaper::pressure_check(c, &cfg, ev2.size as u64)?;
             }
+            let ins = events::insert_event_with_ref(c, &ev2)
+                .map_err(|e| ApiError::internal(format!("insert: {e}")))?;
             Ok(ins)
         })
         .await;
