@@ -132,6 +132,12 @@ impl Db {
         db
     }
 
+    /// Path of the underlying `index.db`. Used to key per-database runtime
+    /// state (e.g. the shared SSE feed) when several `Db`s exist in-process.
+    pub fn path(&self) -> &Path {
+        &self.readers.path
+    }
+
     /// Run a closure against the single writer connection inside a blocking
     /// task; writes are serialized, readers are not.
     pub async fn write<T, F>(&self, f: F) -> T

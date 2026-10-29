@@ -1,4 +1,5 @@
 use std::sync::atomic::Ordering;
+use std::sync::OnceLock;
 
 use axum::body::Body;
 use axum::extract::{Path, Request, State};
@@ -331,6 +332,173 @@ impl Drop for SseGuard {
     }
 }
 
+/// One live row, broadcast to every SSE subscriber. Each subscriber applies its
+/// own filters in memory, so the shared feed needs exactly one DB query per
+/// tick regardless of subscriber count.
+struct SseRow {
+    rowid: i64,
+    collection: String,
+    owner: Vec<u8>,
+    labels: Vec<String>,
+    expires_at: i64,
+    state: String,
+    served: Vec<u8>,
+}
+
+type SseSender = tokio::sync::mpsc::Sender<Result<axum::body::Bytes, axum::Error>>;
+
+type SseFeed = tokio::sync::broadcast::Sender<std::sync::Arc<SseRow>>;
+
+/// One feed per database, keyed by `index.db` path. Production has exactly one
+/// node/database; the map keeps independent in-process databases from leaking
+/// rows into each other's subscribers.
+static SSE_FEEDS: OnceLock<tokio::sync::Mutex<std::collections::HashMap<std::path::PathBuf, SseFeed>>> =
+    OnceLock::new();
+const SSE_FEED_CAPACITY: usize = 2048;
+const SSE_FEED_POLL: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Start (once) and return the shared feed for this database. Its cursor is
+/// initialized before the caller subscribes and captures its high-water mark,
+/// so no committed row can slip between the two.
+async fn ensure_sse_feed(db: &crate::db::Db) -> SseFeed {
+    let feeds = SSE_FEEDS.get_or_init(|| tokio::sync::Mutex::new(std::collections::HashMap::new()));
+    let mut feeds = feeds.lock().await;
+    if let Some(tx) = feeds.get(db.path()) {
+        return tx.clone();
+    }
+
+    let from = db.clone();
+    let cursor = from
+        .read(|c: &Connection| {
+            c.query_row("SELECT COALESCE(MAX(rowid),0) FROM events", [], |r| r.get(0))
+                .unwrap_or(0)
+        })
+        .await;
+    let (tx, _) = tokio::sync::broadcast::channel(SSE_FEED_CAPACITY);
+    feeds.insert(db.path().to_path_buf(), tx.clone());
+    tokio::spawn(sse_feed_loop(from, tx.clone(), cursor));
+    tx
+}
+
+async fn sse_feed_loop(db: crate::db::Db, tx: SseFeed, mut cursor: i64) {
+    loop {
+        let from = cursor;
+        let rows = db
+            .read(move |c: &Connection| read_sse_rows(c, from, 1000))
+            .await
+            .unwrap_or_default();
+        if let Some(last) = rows.last() {
+            cursor = last.rowid;
+        }
+        for row in rows {
+            let _ = tx.send(std::sync::Arc::new(row));
+        }
+        tokio::time::sleep(SSE_FEED_POLL).await;
+    }
+}
+
+/// Read rows in rowid order without an expiry predicate: the cursor must move
+/// past dead rows too, otherwise they would be rescanned on every feed tick.
+fn read_sse_rows(c: &Connection, after: i64, limit: i64) -> rusqlite::Result<Vec<SseRow>> {
+    let mut stmt = c.prepare(
+        "SELECT rowid, collection, owner, labels, expires_at, state, data
+         FROM events WHERE rowid > ?1 ORDER BY rowid ASC LIMIT ?2",
+    )?;
+    let mut rows = stmt.query(rusqlite::params![after, limit])?;
+    let mut out = Vec::new();
+    while let Some(r) = rows.next()? {
+        out.push(SseRow {
+            rowid: r.get(0)?,
+            collection: r.get(1)?,
+            owner: r.get(2)?,
+            labels: serde_json::from_str(&r.get::<_, String>(3)?).unwrap_or_default(),
+            expires_at: r.get(4)?,
+            state: r.get(5)?,
+            served: r.get(6)?,
+        });
+    }
+    Ok(out)
+}
+
+fn sse_matches(filters: &ListFilters, row: &SseRow) -> bool {
+    if let Some(collection) = &filters.collection {
+        if &row.collection != collection {
+            return false;
+        }
+    }
+    if let Some(owner) = &filters.owner_hex {
+        let Ok(owner) = hex::decode(owner) else { return false };
+        if row.owner != owner {
+            return false;
+        }
+    }
+    if !filters.labels.is_empty()
+        && !filters.labels.iter().all(|label| row.labels.contains(label))
+    {
+        return false;
+    }
+    true
+}
+
+fn sse_frame(rowid: i64, served: &[u8]) -> axum::body::Bytes {
+    axum::body::Bytes::from(format!(
+        "id: {rowid}\nevent: message\ndata: {}\n\n",
+        String::from_utf8_lossy(served)
+    ))
+}
+
+/// Fetch the filtered backlog in rowid order. The returned cursor is the
+/// high-water mark, not just the last matching row, so missed filtered rows
+/// are never rescanned.
+async fn sse_catch_up(
+    db: &crate::db::Db,
+    filters: &ListFilters,
+    from: i64,
+    to: i64,
+    tx: &SseSender,
+) -> Result<i64, ()> {
+    let mut next = from;
+    while next < to {
+        let filters = filters.clone();
+        let lo = next;
+        let hi = to;
+        let batch = db
+            .read(move |c: &Connection| {
+                // rebuild the predicate per batch (clock moves; binds aren't clonable)
+                let (pred, mut binds) = events::build_predicate(&filters, reaper::now());
+                let r_at = events::next_bind(&mut binds, events::SqlParam::I(lo));
+                let h_at = events::next_bind(&mut binds, events::SqlParam::I(hi));
+                let l_at = events::next_bind(&mut binds, events::SqlParam::I(200));
+                let sql = format!(
+                    "{pred} AND rowid > {r_at} AND rowid <= {h_at} ORDER BY rowid ASC LIMIT {l_at}"
+                );
+                events::run_list(c, &sql, &binds)
+            })
+            .await;
+        let batch = match batch {
+            Ok(batch) => batch,
+            Err(e) => {
+                tracing::debug!(error = format!("{e}"), "sse catch-up error");
+                return Err(());
+            }
+        };
+        if batch.is_empty() {
+            return Ok(to);
+        }
+        let full = batch.len() == 200;
+        for r in &batch {
+            if tx.send(Ok(sse_frame(r.rowid, &r.served))).await.is_err() {
+                return Err(());
+            }
+        }
+        next = batch.last().map(|r| r.rowid).unwrap_or(next);
+        if !full {
+            return Ok(to);
+        }
+    }
+    Ok(to)
+}
+
 async fn stream_inner(n: AppState, headers: HeaderMap, p: RawQ) -> ApiResult<Response> {
     let cap = n.cfg.sse_subscriber_cap as i64;
     if SSE_ACTIVE.load(Ordering::Relaxed) >= cap {
@@ -348,19 +516,6 @@ async fn stream_inner(n: AppState, headers: HeaderMap, p: RawQ) -> ApiResult<Res
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<i64>().ok());
 
-    // resume point: after the given rowid, else the newest row (future tail)
-    let start: i64 = match last_event_id {
-        Some(x) => x,
-        None => {
-            n.db
-                .read(|c: &Connection| {
-                    c.query_row("SELECT COALESCE(MAX(rowid),0) FROM events", [], |r| r.get(0))
-                        .unwrap_or(0)
-                })
-                .await
-        }
-    };
-
     use tokio::sync::mpsc;
     use tokio_stream::wrappers::ReceiverStream;
 
@@ -372,44 +527,84 @@ async fn stream_inner(n: AppState, headers: HeaderMap, p: RawQ) -> ApiResult<Res
         SSE_ACTIVE.fetch_add(1, Ordering::Relaxed);
         let _guard = SseGuard;
 
-        let mut next_rowid = start;
-        let mut last_keepalive = std::time::Instant::now();
-        tracing::debug!(sse_start = next_rowid, "sse worker polling");
-        loop {
-            // rebuild the predicate each poll (clock moves; binds aren't clonable).
-            // run_list wraps the bare predicate into the full SELECT itself.
-            let (pred, mut binds) = events::build_predicate(&filters, reaper::now());
-            let r_at = events::next_bind(&mut binds, events::SqlParam::I(next_rowid));
-            let l_at = events::next_bind(&mut binds, events::SqlParam::I(100));
-            let sql = format!("{pred} AND rowid > {r_at} ORDER BY rowid ASC LIMIT {l_at}");
-            let batch = db.read(move |c: &Connection| events::run_list(c, &sql, &binds)).await;
-            if let Err(e) = &batch {
-                tracing::debug!(error = format!("{e}"), "sse poll error");
+        // Subscribe before taking the high-water mark. Rows committed while
+        // the backlog is fetched are then either in that backlog or queued.
+        let mut feed = ensure_sse_feed(&db).await.subscribe();
+        let high_water = db
+            .read(|c: &Connection| {
+                c.query_row("SELECT COALESCE(MAX(rowid),0) FROM events", [], |r| r.get(0))
+                    .unwrap_or(0)
+            })
+            .await;
+
+        // resume point: after the given rowid, else the newest row (future tail)
+        let mut next_rowid = match last_event_id {
+            Some(x) => x,
+            None => high_water,
+        };
+        tracing::debug!(sse_start = next_rowid, high_water, "sse worker attached");
+
+        if next_rowid < high_water {
+            match sse_catch_up(&db, &filters, next_rowid, high_water, &tx).await {
+                Ok(next) => next_rowid = next,
+                Err(()) => return, // client went away or DB failed
             }
-            match batch {
-                Ok(batch) => {
-                    next_rowid = batch.last().map(|r| r.rowid).unwrap_or(next_rowid);
-                    for r in &batch {
-                        let frame = format!(
-                            "id: {}\nevent: message\ndata: {}\n\n",
-                            r.rowid,
-                            String::from_utf8_lossy(&r.served)
-                        );
-                        if tx.send(Ok(axum::body::Bytes::from(frame))).await.is_err() {
-                            return; // client went away
+        }
+
+        let mut keepalive = tokio::time::interval_at(
+            tokio::time::Instant::now() + std::time::Duration::from_secs(15),
+            std::time::Duration::from_secs(15),
+        );
+        keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+        loop {
+            tokio::select! {
+                received = feed.recv() => {
+                    match received {
+                        Ok(row) => {
+                            if row.rowid <= next_rowid {
+                                continue;
+                            }
+                            next_rowid = row.rowid;
+                            if row.state != "live"
+                                || row.expires_at <= reaper::now()
+                                || !sse_matches(&filters, &row)
+                            {
+                                continue;
+                            }
+                            if tx.send(Ok(sse_frame(row.rowid, &row.served))).await.is_err() {
+                                return;
+                            }
                         }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            tracing::debug!(skipped, "sse subscriber lagged; catching up");
+                            let current = db
+                                .read(|c: &Connection| {
+                                    c.query_row(
+                                        "SELECT COALESCE(MAX(rowid),0) FROM events",
+                                        [],
+                                        |r| r.get(0),
+                                    )
+                                    .unwrap_or(0)
+                                })
+                                .await;
+                            if current > next_rowid {
+                                match sse_catch_up(&db, &filters, next_rowid, current, &tx).await {
+                                    Ok(next) => next_rowid = next,
+                                    Err(()) => return,
+                                }
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                     }
                 }
-                Err(_) => break,
-            }
-
-            if last_keepalive.elapsed() >= std::time::Duration::from_secs(15) {
-                if tx.send(Ok(axum::body::Bytes::from(": keepalive\n\n"))).await.is_err() {
-                    return;
+                _ = keepalive.tick() => {
+                    if tx.send(Ok(axum::body::Bytes::from_static(b": keepalive\n\n"))).await.is_err() {
+                        return;
+                    }
                 }
-                last_keepalive = std::time::Instant::now();
+                _ = tx.closed() => return,
             }
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
             if tx.is_closed() {
                 return;
             }
@@ -505,5 +700,37 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shared_feed_filters_in_memory() {
+        let row = SseRow {
+            rowid: 9,
+            collection: "chat".into(),
+            owner: vec![0x11; 32],
+            labels: vec!["team".into(), "urgent".into()],
+            expires_at: reaper::now() + 3600,
+            state: "live".into(),
+            served: b"{}".to_vec(),
+        };
+
+        // no filters: everything matches
+        assert!(sse_matches(&ListFilters::default(), &row));
+
+        let collection = ListFilters { collection: Some("chat".into()), ..Default::default() };
+        assert!(sse_matches(&collection, &row));
+        let other = ListFilters { collection: Some("mail".into()), ..Default::default() };
+        assert!(!sse_matches(&other, &row));
+
+        let owner = ListFilters { owner_hex: Some(hex::encode([0x11; 32])), ..Default::default() };
+        assert!(sse_matches(&owner, &row));
+        let stranger = ListFilters { owner_hex: Some(hex::encode([0x22; 32])), ..Default::default() };
+        assert!(!sse_matches(&stranger, &row));
+
+        // repeated labels are AND, not OR
+        let both = ListFilters { labels: vec!["team".into(), "urgent".into()], ..Default::default() };
+        assert!(sse_matches(&both, &row));
+        let missing = ListFilters { labels: vec!["team".into(), "missing".into()], ..Default::default() };
+        assert!(!sse_matches(&missing, &row));
     }
 }
