@@ -72,7 +72,7 @@ pub async fn publish_envelope(n: AppState, bytes: Vec<u8>) -> ApiResult<Response
         body["blob_url"] = json!(format!("/blobs/{b}"));
     }
     let status = if inserted { StatusCode::CREATED } else { StatusCode::OK };
-    Ok((status, serde_json::to_string(&body).unwrap()).into_response())
+    Ok((status, Json(body)).into_response())
 }
 
 /// One transaction: pressure check → event row → refs junction.
@@ -423,4 +423,87 @@ async fn stream_inner(n: AppState, headers: HeaderMap, p: RawQ) -> ApiResult<Res
         .header("x-accel-buffering", "no")
         .body(Body::from_stream(ReceiverStream::new(rx)))
         .unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+    use sha2::{Digest, Sha256};
+    use std::sync::Arc;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+        let dir = std::env::temp_dir().join(format!("rabta-{tag}-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn publish_returns_json_content_type() {
+        let dir = temp_dir("event-content-type");
+        let db = crate::db::Db::open(&dir);
+        let cfg = crate::config::Config {
+            port: 0,
+            data_dir: dir.clone(),
+            storage_max: 10_000_000,
+            storage_clamped: false,
+            storage_max_configured: 10_000_000,
+            max_single_blob: 1_000_000,
+            watermark_bytes: 9_000_000,
+            eviction_target_bytes: 8_500_000,
+            sse_subscriber_cap: 1,
+            sync_nodes: Vec::new(),
+            sync_interval: Duration::from_secs(60),
+        };
+        let n: AppState = Arc::new(crate::api::Node {
+            cfg,
+            db,
+            http: reqwest::Client::new(),
+            started_at: reaper::now(),
+        });
+
+        let now = reaper::now();
+        let created_at = now - 10;
+        let expires_at = now + 3600;
+        let key = SigningKey::from_bytes(&[7u8; 32]);
+        let owner = format!("ed25519:{}", hex::encode(key.verifying_key().to_bytes()));
+        let data = json!({"message": "hello"});
+        let canonical = crate::canon::digest_value(
+            "test",
+            created_at,
+            expires_at,
+            &owner,
+            &[],
+            &data,
+            None,
+        );
+        let digest: [u8; 32] =
+            Sha256::digest(crate::canon::canonical_value(&canonical)).into();
+        let sig = key.sign(&digest);
+        let envelope = json!({
+            "collection": "test",
+            "created_at": created_at,
+            "data": data,
+            "expires_at": expires_at,
+            "labels": [],
+            "owner": owner,
+            "id": hex::encode(digest),
+            "sig": hex::encode(sig.to_bytes()),
+        });
+
+        let resp = publish_envelope(n, serde_json::to_vec(&envelope).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        assert_eq!(
+            resp.headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some("application/json")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
