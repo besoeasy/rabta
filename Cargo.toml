@@ -2,7 +2,7 @@
 name = "rabta"
 version = "0.0.1-dev"
 edition = "2024"
-description = "rabta node — events + blobs on one port, Rust"
+description = "Self-hosted zero-knowledge backend: signed events, content-addressed blobs, SSE, and peer sync"
 
 [dependencies]
 axum = { version = "0.8" }
