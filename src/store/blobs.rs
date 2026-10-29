@@ -157,8 +157,8 @@ pub fn insert_blob_row(
     if exists == 1 {
         return Ok(BlobInsertResult::Deduped);
     }
-    let (_, blobs_now) = crate::db::live_bytes(c);
-    if (blobs_now + size as i64) as u64 > watermark_bytes {
+    let (events_now, blobs_now) = crate::db::live_bytes(c);
+    if (events_now + blobs_now + size as i64) as u64 > watermark_bytes {
         return Ok(BlobInsertResult::WatermarkFull);
     }
     c.execute(
@@ -200,11 +200,11 @@ pub async fn install_staged(
 
     let outcome = match db
         .write(move |c: &rusqlite::Connection| -> rusqlite::Result<Install> {
-            let (ev, _bl) = crate::db::live_bytes(c);
-            if (ev + size as i64) as u64 > water {
+            let (ev, bl) = crate::db::live_bytes(c);
+            if (ev + bl + size as i64) as u64 > water {
                 crate::store::reaper::evict_pass(c, &cfg2);
-                let (ev2, _bl2) = crate::db::live_bytes(c);
-                if (ev2 + size as i64) as u64 > water {
+                let (ev2, bl2) = crate::db::live_bytes(c);
+                if (ev2 + bl2 + size as i64) as u64 > water {
                     // cannot free enough — the insert below will refuse
                 }
             }
