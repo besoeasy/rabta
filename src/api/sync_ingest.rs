@@ -97,3 +97,89 @@ pub async fn store_envelope(n: &AppState, bytes: Vec<u8>) -> ApiResult<bool> {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+    use serde_json::json;
+    use sha2::{Digest, Sha256};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+        let dir = std::env::temp_dir().join(format!("rabta-{tag}-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn envelope(n: i64) -> Vec<u8> {
+        let now = reaper::now();
+        let created_at = now - 10;
+        let expires_at = now + 3600;
+        let key = SigningKey::from_bytes(&[7u8; 32]);
+        let owner = format!("ed25519:{}", hex::encode(key.verifying_key().to_bytes()));
+        let data = json!({"n": n});
+        let canonical =
+            crate::canon::digest_value("test", created_at, expires_at, &owner, &[], &data, None);
+        let digest: [u8; 32] = Sha256::digest(crate::canon::canonical_value(&canonical)).into();
+        let sig = key.sign(&digest);
+        serde_json::to_vec(&json!({
+            "collection": "test",
+            "created_at": created_at,
+            "data": data,
+            "expires_at": expires_at,
+            "labels": [],
+            "owner": owner,
+            "id": hex::encode(digest),
+            "sig": hex::encode(sig.to_bytes()),
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn duplicate_retry_skips_admission_and_does_not_evict() {
+        let dir = temp_dir("sync-dup");
+        let cfg = crate::config::Config {
+            port: 0,
+            data_dir: dir.clone(),
+            storage_max: 1000,
+            storage_clamped: false,
+            storage_max_configured: 1000,
+            max_single_blob: 100,
+            watermark_bytes: 1, // nothing new can be admitted
+            eviction_target_bytes: 0,
+            sse_subscriber_cap: 1,
+            sync_nodes: Vec::new(),
+            sync_interval: Duration::from_secs(60),
+        };
+        let n = std::sync::Arc::new(crate::api::Node {
+            cfg,
+            db: crate::db::Db::open(&dir),
+            http: reqwest::Client::new(),
+            started_at: reaper::now(),
+        });
+
+        let bytes = envelope(1);
+        let ev = events::parse_and_verify(&bytes, reaper::now()).unwrap();
+        n.db.write(move |c| {
+            events::insert_event_with_ref(c, &ev).unwrap();
+        })
+        .await;
+
+        // Duplicate: the pre-admission existence check must short-circuit
+        // pressure, so this succeeds even though the watermark is exhausted.
+        assert!(!store_envelope(&n, bytes).await.unwrap());
+        let count: i64 = n
+            .db
+            .read(|c| c.query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0)).unwrap())
+            .await;
+        assert_eq!(count, 1);
+
+        // A genuinely new event still hits admission and is refused.
+        assert!(store_envelope(&n, envelope(2)).await.is_err());
+
+        drop(n);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

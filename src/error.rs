@@ -30,6 +30,13 @@ impl ApiError {
     pub fn bad_label(msg: impl Into<String>) -> ApiError {
         ApiError::new(StatusCode::BAD_REQUEST, "bad_label", msg)
     }
+    pub fn bad_owner() -> ApiError {
+        ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "bad_owner",
+            "owner must be `ed25519:<64-hex pubkey>`",
+        )
+    }
     pub fn ttl_range(msg: impl Into<String>) -> ApiError {
         ApiError::new(StatusCode::BAD_REQUEST, "ttl_range", msg)
     }

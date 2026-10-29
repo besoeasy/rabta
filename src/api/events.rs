@@ -183,7 +183,7 @@ async fn list_inner(n: AppState, p: RawQ) -> ApiResult<Response> {
     let filters = ListFilters {
         collection: p.collection.clone(),
         labels: p.labels,
-        owner_hex: owner_filter_for(&p.owner),
+        owner_hex: owner_filter_for(&p.owner)?,
         limit: p.limit.unwrap_or(20).clamp(1, 100),
     };
     let cursor = match &p.cursor {
@@ -217,8 +217,11 @@ async fn list_inner(n: AppState, p: RawQ) -> ApiResult<Response> {
     Ok(Json(body).into_response())
 }
 
-fn owner_filter_for(s: &Option<String>) -> Option<String> {
-    s.as_deref().and_then(normalize_owner)
+fn owner_filter_for(s: &Option<String>) -> ApiResult<Option<String>> {
+    match s {
+        None => Ok(None),
+        Some(raw) => normalize_owner(raw).map(Some).ok_or_else(ApiError::bad_owner),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -553,7 +556,7 @@ async fn stream_inner(n: AppState, headers: HeaderMap, p: RawQ) -> ApiResult<Res
     let filters = ListFilters {
         collection: p.collection.clone(),
         labels: p.labels,
-        owner_hex: owner_filter_for(&p.owner),
+        owner_hex: owner_filter_for(&p.owner)?,
         limit: 100,
     };
     let last_event_id = headers
@@ -868,5 +871,17 @@ mod tests {
         assert!(sse_matches(&both, &row));
         let missing = ListFilters { labels: vec!["team".into(), "missing".into()], ..Default::default() };
         assert!(!sse_matches(&missing, &row));
+    }
+
+    #[test]
+    fn invalid_owner_filter_is_rejected() {
+        let err = owner_filter_for(&Some("ed25519:not-hex".into())).unwrap_err();
+        assert_eq!(err.code, "bad_owner");
+        assert_eq!(err.status, StatusCode::BAD_REQUEST);
+        assert!(owner_filter_for(&None).unwrap().is_none());
+
+        let canonical = format!("ed25519:{}", "AB".repeat(32));
+        let ok = owner_filter_for(&Some(canonical)).unwrap();
+        assert_eq!(ok, Some("ab".repeat(32)));
     }
 }

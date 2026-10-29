@@ -93,7 +93,17 @@ async fn get_inner(n: AppState, headers: HeaderMap, hash_hex: String) -> ApiResu
     }
 
     let file_path = blobs::blob_path(&n.cfg.data_dir, &etag);
-    let mut file = match tokio::fs::File::open(&file_path).await {
+    let mut opened = tokio::fs::File::open(&file_path).await;
+    // Row present but file gone (crash/partial cleanup): heal from a peer
+    // instead of serving a 404 for metadata we still advertise.
+    if matches!(&opened, Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+        && !n.cfg.sync_nodes.is_empty()
+    {
+        if crate::sync::loop_all::fetch_blob_from_peers(&n, &etag).await {
+            opened = tokio::fs::File::open(&file_path).await;
+        }
+    }
+    let mut file = match opened {
         Ok(f) => f,
         Err(_) => return Err(ApiError::not_found("no such blob")),
     };

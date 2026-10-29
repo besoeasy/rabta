@@ -136,7 +136,7 @@ impl BlobSink {
 /// file the boot sweep removes.
 pub fn materialize(data_dir: &Path, staged: &Staged) -> std::io::Result<bool> {
     let dest = blob_path(data_dir, &staged.hash_hex);
-    if dest.exists() {
+    if dest.is_file() {
         std::fs::remove_file(&staged.path)?;
         return Ok(false);
     }
@@ -187,6 +187,12 @@ pub enum Install {
 
 /// Install a staged temp file: transactional accept-or-refuse + file move.
 /// Used by the raw PUT door, the sync push door, and lazy fetch-on-read.
+///
+/// The file is moved into its content-addressed slot *inside* the writer lock
+/// but before the row commit. A crash before the commit leaves an orphan file
+/// (removed by boot hygiene); a crash after it leaves a complete row+file pair.
+/// A materialization failure rolls the row back, so we never publish a row
+/// whose bytes are missing.
 pub async fn install_staged(
     db: &crate::db::Db,
     cfg: &crate::config::Config,
@@ -199,61 +205,51 @@ pub async fn install_staged(
     let size = staged.size;
     let now = crate::store::reaper::now();
 
-    let outcome = match db
-        .write(move |c: &rusqlite::Connection| -> rusqlite::Result<Install> {
-            // A duplicate install adds no bytes: never evict for a retry.
-            let exists: i64 = c.query_row(
-                "SELECT EXISTS(SELECT 1 FROM blobs WHERE hash = ?1)",
-                [&hash],
-                |r| r.get(0),
-            )?;
-            if exists == 0 {
-                // Demand-aware admission: make room for this blob (or refuse)
-                // before the row insert, so eviction is charged to a write
-                // that can actually be accepted.
-                if crate::store::reaper::pressure_check(c, &cfg2, size).is_err() {
-                    return Ok(Install::Refused);
-                }
+    db.write(move |c: &rusqlite::Connection| -> rusqlite::Result<Install> {
+        // A duplicate install adds no bytes: never evict for a retry.
+        let exists: i64 = c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM blobs WHERE hash = ?1)",
+            [&hash],
+            |r| r.get(0),
+        )?;
+        if exists == 0 {
+            // Demand-aware admission: make room for this blob (or refuse)
+            // before the row insert, so eviction is charged to a write
+            // that can actually be accepted.
+            if crate::store::reaper::pressure_check(c, &cfg2, size).is_err() {
+                staged.discard();
+                return Ok(Install::Refused);
             }
-            let tx = c.unchecked_transaction()?;
-            let r = insert_blob_row(&tx, &hash, size, now, water)?;
-            if r == BlobInsertResult::WatermarkFull {
-                return Ok(Install::Refused); // tx drops → rollback
-            }
-            tx.execute(
-                "UPDATE blobs SET ever_attached=1 WHERE hash=?1 AND EXISTS(SELECT 1 FROM refs WHERE blob_hash=?1)",
-                rusqlite::params![&hash],
-            )?;
-            tx.commit()?;
-            Ok(if r == BlobInsertResult::Inserted { Install::Fresh } else { Install::Deduped })
-        })
-        .await
-    {
-        Ok(outcome) => outcome,
-        Err(e) => {
-            // The row was not committed: never leave the temp file behind.
+        }
+        let tx = c.unchecked_transaction()?;
+        let r = insert_blob_row(&tx, &hash, size, now, water)?;
+        if r == BlobInsertResult::WatermarkFull {
+            drop(tx); // rollback
             staged.discard();
+            return Ok(Install::Refused);
+        }
+        tx.execute(
+            "UPDATE blobs SET ever_attached=1 WHERE hash=?1 AND EXISTS(SELECT 1 FROM refs WHERE blob_hash=?1)",
+            rusqlite::params![&hash],
+        )?;
+        let moved = match materialize(&dir, &staged) {
+            Ok(moved) => moved,
+            Err(e) => {
+                tracing::error!("materialize {}: {e}", staged.hash_hex);
+                drop(tx); // rollback the row: never publish a row without bytes
+                staged.discard();
+                return Ok(Install::Refused);
+            }
+        };
+        if let Err(e) = tx.commit() {
+            if moved && r == BlobInsertResult::Inserted {
+                let _ = std::fs::remove_file(blob_path(&dir, &hex::encode(hash)));
+            }
             return Err(e);
         }
-    };
-
-    match outcome {
-        Install::Fresh => {
-            if let Err(e) = materialize(&dir, &staged) {
-                tracing::error!("materialize {}: {e}", staged.hash_hex);
-            }
-        }
-        Install::Deduped => {
-            // Existing wins, but if its file vanished the staged bytes heal it.
-            if let Err(e) = materialize(&dir, &staged) {
-                tracing::error!("materialize {}: {e}", staged.hash_hex);
-            }
-        }
-        Install::Refused => {
-            staged.discard();
-        }
-    }
-    Ok(outcome)
+        Ok(if r == BlobInsertResult::Inserted { Install::Fresh } else { Install::Deduped })
+    })
+    .await
 }
 
 /// Attach a blob to an event (same transaction as the event insert);
@@ -411,6 +407,33 @@ mod tests {
         dir
     }
 
+    fn test_cfg(dir: &std::path::Path) -> Config {
+        Config {
+            port: 0,
+            data_dir: dir.to_path_buf(),
+            storage_max: 100,
+            storage_clamped: false,
+            storage_max_configured: 100,
+            max_single_blob: 10,
+            watermark_bytes: 90,
+            eviction_target_bytes: 85,
+            sse_subscriber_cap: 1,
+            sync_nodes: Vec::new(),
+            sync_interval: Duration::from_secs(60),
+        }
+    }
+
+    fn staged_file(dir: &std::path::Path, hash: [u8; 32], body: &[u8], tag: &str) -> Staged {
+        let path = tmp_dir(dir).join(tag);
+        std::fs::write(&path, body).unwrap();
+        Staged {
+            hash_hex: hex::encode(hash),
+            hash,
+            size: body.len() as u64,
+            path,
+        }
+    }
+
     #[tokio::test]
     async fn watermark_refusal_discards_staged_file() {
         let dir = temp_dir("blob-refusal");
@@ -447,6 +470,53 @@ mod tests {
             .read(|c| c.query_row("SELECT COUNT(*) FROM blobs", [], |r| r.get(0)).unwrap())
             .await;
         assert_eq!(rows, 0);
+
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn failed_materialize_rolls_back_the_blob_row() {
+        let dir = temp_dir("blob-materialize-fail");
+        init_dirs(&dir).unwrap();
+        let db = Db::open(&dir);
+        let cfg = test_cfg(&dir);
+
+        let hash = [7u8; 32];
+        // A directory at the destination makes the final rename fail.
+        std::fs::create_dir_all(blob_path(&dir, &hex::encode(hash))).unwrap();
+        let staged = staged_file(&dir, hash, b"0123456789", "fail");
+        let path = staged.path.clone();
+
+        let outcome = install_staged(&db, &cfg, staged).await.unwrap();
+        assert_eq!(outcome, Install::Refused);
+        assert!(!path.exists(), "failed materialization left its temp file behind");
+        let rows: i64 = db
+            .read(|c| c.query_row("SELECT COUNT(*) FROM blobs", [], |r| r.get(0)).unwrap())
+            .await;
+        assert_eq!(rows, 0, "row was published without its bytes");
+
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn deduped_install_heals_a_missing_file() {
+        let dir = temp_dir("blob-heal");
+        init_dirs(&dir).unwrap();
+        let db = Db::open(&dir);
+        let cfg = test_cfg(&dir);
+        let hash = [8u8; 32];
+        let dest = blob_path(&dir, &hex::encode(hash));
+
+        let first = install_staged(&db, &cfg, staged_file(&dir, hash, b"abcd", "first")).await.unwrap();
+        assert_eq!(first, Install::Fresh);
+        assert_eq!(std::fs::read(&dest).unwrap(), b"abcd");
+
+        std::fs::remove_file(&dest).unwrap();
+        let second = install_staged(&db, &cfg, staged_file(&dir, hash, b"abcd", "second")).await.unwrap();
+        assert_eq!(second, Install::Deduped);
+        assert_eq!(std::fs::read(&dest).unwrap(), b"abcd", "dedupe did not heal the file");
 
         drop(db);
         let _ = std::fs::remove_dir_all(&dir);

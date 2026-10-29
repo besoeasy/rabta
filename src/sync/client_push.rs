@@ -7,9 +7,23 @@ use crate::api::AppState;
 
 const PAGE: i64 = 500;
 const TIMEOUT: Duration = Duration::from_secs(30);
+/// Bloom positives are not proof of possession (~1% false positives at the
+/// locked sizing). Every positive is re-offered once per rotation window,
+/// so a false positive can delay delivery but never hide an event forever.
+const POSITIVE_ROTATION: i64 = 8;
 
 fn join(peer: &reqwest::Url, path: &str) -> reqwest::Url {
     peer.join(path).expect("joined url")
+}
+
+/// A negative means "definitely absent" → push now. A positive is only
+/// trusted for the current rotation slot; over `POSITIVE_ROTATION` ticks every
+/// positive is pushed at least once, so the peer's Bloom cannot starve us.
+fn should_push(theirs: &Bloom, key: &[u8; 32], seq: i64, rotation: i64) -> bool {
+    if !theirs.test(SEED_EVENTS, key) {
+        return true;
+    }
+    seq.rem_euclid(POSITIVE_ROTATION) == rotation
 }
 
 /// Phase 2: when the planner reported >1000 missing, re-query with sub-filters
@@ -67,6 +81,8 @@ pub async fn push_i_hold_events(n: &AppState, peer: &reqwest::Url, reply: &Value
         Err(_) => return,
     };
     let their = Bloom { bits, cells };
+    // Time-based slot: consecutive ticks rotate which positives are re-offered.
+    let rotation = (crate::store::reaper::now() / 60).rem_euclid(POSITIVE_ROTATION);
 
     let mut last_seq = 0i64;
     loop {
@@ -103,8 +119,8 @@ pub async fn push_i_hold_events(n: &AppState, peer: &reqwest::Url, reply: &Value
             }
             let mut k = [0u8; 32];
             k.copy_from_slice(&id);
-            if their.test(SEED_EVENTS, &k) {
-                continue; // responder already has it
+            if !should_push(&their, &k, seq, rotation) {
+                continue; // responder has it, or not this rotation's turn
             }
             if let Ok(v) = serde_json::from_slice::<Value>(&data) {
                 batch.push(v);
@@ -122,5 +138,31 @@ pub async fn push_i_hold_events(n: &AppState, peer: &reqwest::Url, reply: &Value
         if last_seq == last {
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn negative_bloom_hit_pushes_immediately() {
+        let theirs = Bloom::sized(1);
+        for rotation in 0..POSITIVE_ROTATION {
+            assert!(should_push(&theirs, &[8u8; 32], 3, rotation));
+        }
+    }
+
+    #[test]
+    fn positive_bloom_hit_is_retried_across_the_rotation() {
+        let mut theirs = Bloom::sized(1);
+        let key = [7u8; 32];
+        theirs.add(SEED_EVENTS, &key);
+        assert!(theirs.test(SEED_EVENTS, &key));
+
+        let slots: Vec<i64> = (0..POSITIVE_ROTATION)
+            .filter(|rotation| should_push(&theirs, &key, 3, *rotation))
+            .collect();
+        assert_eq!(slots, vec![3], "positive was skipped for every rotation slot");
     }
 }
