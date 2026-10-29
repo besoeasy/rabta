@@ -140,7 +140,9 @@ pub fn parse_and_verify(body: &[u8], now: i64) -> ApiResult<ParsedEvent> {
     if expires_at <= now {
         return Err(ApiError::ttl_range("expires_at is not in the future (dead on arrival)"));
     }
-    let ttl = expires_at - created_at;
+    let Some(ttl) = expires_at.checked_sub(created_at) else {
+        return Err(ApiError::ttl_range("ttl is out of range"));
+    };
     if ttl <= MIN_TTL_SECONDS {
         return Err(ApiError::ttl_range(format!("ttl must be > {MIN_TTL_SECONDS}s and <= 365d")));
     }
@@ -460,5 +462,26 @@ mod tests {
             })
             .unwrap();
         assert_eq!(seq, 0, "sequence counter advanced on a rolled-back insert");
+    }
+
+    #[test]
+    fn ttl_subtraction_overflow_is_rejected_not_panicking() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+        let owner = format!("ed25519:{}", hex::encode(key.verifying_key().to_bytes()));
+        let envelope = serde_json::json!({
+            "id": "00".repeat(32),
+            "sig": "00".repeat(64),
+            "owner": owner,
+            "collection": "test",
+            "created_at": i64::MIN,
+            "expires_at": i64::MAX,
+            "data": {},
+            "labels": [],
+        });
+        let err = match parse_and_verify(&serde_json::to_vec(&envelope).unwrap(), 100) {
+            Ok(_) => panic!("overflowing ttl was accepted"),
+            Err(e) => e,
+        };
+        assert_eq!(err.code, "ttl_range");
     }
 }

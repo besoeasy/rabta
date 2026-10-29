@@ -115,6 +115,7 @@ impl Db {
         c.pragma_update(None, "journal_mode", "WAL").ok();
         c.execute_batch(SCHEMA).expect("schema init failed");
         migrate(&c).expect("schema migration failed");
+        reconcile_counters(&c);
 
         // One writer + a reader pool. WAL lets readers run against a stable
         // snapshot while the writer commits; they never share its lock.
@@ -132,7 +133,6 @@ impl Db {
             readers: Arc::new(ReaderPool::new(path, readers)),
             events_changed: Arc::new(tokio::sync::Notify::new()),
         };
-        reconcile_counters(&db);
         db
     }
 
@@ -203,8 +203,7 @@ fn configure_connection(c: &Connection) {
 /// Recompute the live_bytes counters from the tables themselves — a periodic
 /// hygiene pass, and the boot-time repair. `live_bytes` is normally maintained
 /// per transaction, never recomputed.
-fn reconcile_counters(db: &Db) {
-    let c = db.writer.lock().expect("poisoned");
+pub fn reconcile_counters(c: &Connection) {
     let mut stmt = c.prepare("SELECT COALESCE(SUM(size),0) FROM events WHERE state='live'").unwrap();
     let ev: i64 = stmt.query_row([], |r| r.get(0)).unwrap_or(0);
     let mut stmt = c.prepare("SELECT COALESCE(SUM(size),0) FROM blobs WHERE state='live'").unwrap();

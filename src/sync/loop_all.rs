@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -11,6 +12,34 @@ use crate::api::sync_ingest;
 /// Bound on concurrent blob pulls per peer tick. Pulls are hash-verified and
 /// independent; a small window keeps one slow peer from serializing the tick.
 const BLOB_PULL_CONCURRENCY: usize = 4;
+
+/// Lazy read healing (public GET and peer GET) counters for `/stats`.
+pub struct HealCounters {
+    pub attempts: AtomicU64,
+    pub succeeded: AtomicU64,
+    pub failed: AtomicU64,
+}
+
+pub static HEAL_COUNTERS: HealCounters = HealCounters {
+    attempts: AtomicU64::new(0),
+    succeeded: AtomicU64::new(0),
+    failed: AtomicU64::new(0),
+};
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct HealSnapshot {
+    pub attempts: u64,
+    pub succeeded: u64,
+    pub failed: u64,
+}
+
+pub fn heal_snapshot() -> HealSnapshot {
+    HealSnapshot {
+        attempts: HEAL_COUNTERS.attempts.load(Ordering::Relaxed),
+        succeeded: HEAL_COUNTERS.succeeded.load(Ordering::Relaxed),
+        failed: HEAL_COUNTERS.failed.load(Ordering::Relaxed),
+    }
+}
 
 
 fn join(peer: &reqwest::Url, path: &str) -> reqwest::Url {
@@ -108,7 +137,7 @@ async fn tick(n: &AppState, peer: &reqwest::Url) -> bool {
             .map(|hash_hex| {
                 let app = AppState::clone(n);
                 let peer = reqwest::Url::clone(peer);
-                async move { super::pulls::pull_blob(&app, &peer, &hash_hex).await }
+                async move { super::pulls::pull_blob_with_backoff(&app, &peer, &hash_hex).await }
             })
             .buffer_unordered(BLOB_PULL_CONCURRENCY);
         let _pulled: Vec<bool> = pulls.collect().await;
@@ -143,10 +172,16 @@ pub fn push_event_to_peers(n: &AppState, served: Vec<u8>) {
 
 /// Lazy blob fetch-on-read for a GET miss; tries peers in order.
 pub async fn fetch_blob_from_peers(n: &AppState, hash_hex: &str) -> bool {
+    if n.cfg.sync_nodes.is_empty() {
+        return false;
+    }
+    HEAL_COUNTERS.attempts.fetch_add(1, Ordering::Relaxed);
     for peer in &n.cfg.sync_nodes {
         if super::pulls::pull_blob(n, peer, hash_hex).await {
+            HEAL_COUNTERS.succeeded.fetch_add(1, Ordering::Relaxed);
             return true;
         }
     }
+    HEAL_COUNTERS.failed.fetch_add(1, Ordering::Relaxed);
     false
 }

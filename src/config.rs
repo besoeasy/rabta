@@ -189,10 +189,16 @@ pub fn parse_size(s: &str) -> Result<u64, String> {
         return Err(format!("no number in `{s}`"));
     }
     let f: f64 = raw.parse().map_err(|_| format!("not a number: `{raw}`"))?;
-    if f < 0.0 || f > 1.0e18 {
+    if !f.is_finite() || f < 0.0 || f > 1.0e18 {
         return Err(format!("size out of range: `{s}`"));
     }
-    Ok((f * mult as f64).floor() as u64)
+    let scaled = (f * mult as f64).floor();
+    // f64::MAX and NaN would both saturate on cast; reject anything that does
+    // not fit u64 instead of silently storing a bogus budget.
+    if !scaled.is_finite() || scaled >= u64::MAX as f64 {
+        return Err(format!("size overflows u64: `{s}`"));
+    }
+    Ok(scaled as u64)
 }
 
 /// 90% of the device holding `dir`. Public wrapper reused by /stats.
@@ -247,6 +253,11 @@ mod tests {
         assert!(parse_size("20").is_ok());
         assert!(parse_size("abc").is_err());
         assert!(parse_size("").is_err());
+        assert!(parse_size("NaN").is_err());
+        assert!(parse_size("inf").is_err());
+        assert!(parse_size("1e309").is_err());
+        assert!(parse_size("18446744073709551616").is_err());
+        assert!(parse_size("1e18TB").is_err());
     }
 
     #[test]

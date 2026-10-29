@@ -68,7 +68,11 @@ pub async fn stats(State(n): State<AppState>) -> impl IntoResponse {
         .await;
 
     let idx = &reaper::COUNTERS;
+    let pulls = crate::sync::pulls::snapshot();
+    let heals = crate::sync::loop_all::heal_snapshot();
     let free = crate::config::free_bytes_public(&cfg.data_dir);
+    let last_sweep = reaper::last_sweep_at();
+    let now = reaper::now();
     let body = json!({
         "events": { "live": data.0, "bytes": data.2 },
         "blobs": { "live": data.1, "bytes": data.3 },
@@ -82,6 +86,15 @@ pub async fn stats(State(n): State<AppState>) -> impl IntoResponse {
             "free_bytes": free,
             "data_dir": cfg.data_dir.to_string_lossy(),
         },
+        "reaper": {
+            "interval_s": reaper::REAPER_INTERVAL.as_secs(),
+            "last_sweep_at": if last_sweep > 0 { json!(last_sweep) } else { json!(null) },
+            "last_sweep_age_s": if last_sweep > 0 {
+                json!(now.saturating_sub(last_sweep))
+            } else {
+                json!(null)
+            },
+        },
         "eviction": {
             "events_evicted": idx.events_evicted.load(std::sync::atomic::Ordering::Relaxed),
             "blobs_evicted": idx.blobs_evicted.load(std::sync::atomic::Ordering::Relaxed),
@@ -94,8 +107,20 @@ pub async fn stats(State(n): State<AppState>) -> impl IntoResponse {
         "sync": {
             "nodes": n.cfg.sync_nodes.len(),
             "interval_s": n.cfg.sync_interval.as_secs(),
+            "pulls": {
+                "attempts": pulls.attempts,
+                "succeeded": pulls.succeeded,
+                "failed": pulls.failed,
+                "skipped_backoff": pulls.skipped_backoff,
+                "in_backoff": pulls.in_backoff,
+            },
+            "heals": {
+                "attempts": heals.attempts,
+                "succeeded": heals.succeeded,
+                "failed": heals.failed,
+            },
         },
-        "uptime_s": crate::store::reaper::now() - n.started_at,
+        "uptime_s": now - n.started_at,
         "version": env!("CARGO_PKG_VERSION"),
     });
     (StatusCode::OK, Json(body)).into_response()

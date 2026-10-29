@@ -39,6 +39,13 @@ pub static COUNTERS: Counters = Counters {
     live_events_cache: AtomicI64::new(0),
 };
 
+/// Unix seconds of the last completed reaper tick (0 before the first).
+static LAST_SWEEP_AT: AtomicI64 = AtomicI64::new(0);
+
+pub fn last_sweep_at() -> i64 {
+    LAST_SWEEP_AT.load(Ordering::Relaxed)
+}
+
 fn add(a: &AtomicU64, n: u64) {
     a.fetch_add(n, Ordering::Relaxed);
 }
@@ -253,11 +260,15 @@ pub fn sweep_once(c: &Connection, cfg: &Config) -> EvictionStats {
 pub async fn reaper_tick(db: &Db, cfg: Config) {
     let _ = db
         .write(move |conn: &Connection| {
+            // Cheap table scan once per cadence: repair any counter drift before
+            // this pass makes eviction decisions from those totals.
+            crate::db::reconcile_counters(conn);
             sweep_once(conn, &cfg);
             evict_pass(conn, &cfg, 0);
             0
         })
         .await;
+    LAST_SWEEP_AT.store(now(), Ordering::Relaxed);
 }
 
 #[cfg(test)]
@@ -329,6 +340,35 @@ mod tests {
             .await;
         assert!(stats.events_evicted >= 1, "incoming write did not trigger eviction");
         assert!(live.0 + live.1 <= 85, "live bytes {} still above target", live.0 + live.1);
+
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn tick_reconciles_drifted_counters_and_records_sweep_time() {
+        let dir = temp_dir("reaper-reconcile");
+        let db = Db::open(&dir);
+        let cfg = test_cfg(&dir);
+        let cfg_tick = cfg.clone();
+
+        db.write(|c| {
+            c.execute(
+                "INSERT INTO events(id, owner, collection, created_at, expires_at, data, labels, size, mime, state)
+                 VALUES (?1, ?2, 'c', 1, 9999999999, x'', '[]', 30, 'application/json', 'live')",
+                rusqlite::params![[9u8; 32], [0u8; 32]],
+            )
+            .unwrap();
+            // Deliberately leave live_bytes_events stale at zero.
+        })
+        .await;
+
+        let before = now();
+        reaper_tick(&db, cfg_tick).await;
+
+        let (ev, _) = db.read(|c| crate::db::live_bytes(c)).await;
+        assert_eq!(ev, 30, "reaper did not reconcile the event byte counter");
+        assert!(last_sweep_at() >= before, "reaper did not record the sweep time");
 
         drop(db);
         let _ = std::fs::remove_dir_all(&dir);

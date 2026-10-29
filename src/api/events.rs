@@ -139,6 +139,23 @@ pub fn parse_raw_query(q: Option<&str>) -> RawQ {
     out
 }
 
+/// Repeated distinct labels mean AND. Empty or duplicate labels are client
+/// mistakes (duplicates add no selectivity and inflate the SQL predicate).
+fn validate_labels(labels: &[String]) -> ApiResult<()> {
+    let mut seen = std::collections::HashSet::with_capacity(labels.len());
+    for label in labels {
+        if label.is_empty() {
+            return Err(ApiError::bad_label("label filter must not be empty"));
+        }
+        if !seen.insert(label.as_str()) {
+            return Err(ApiError::bad_label(format!(
+                "duplicate label filter `{label}`"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Percent-decode (+→space); lone `%` passes through literally.
 fn urldecode(s: &str) -> String {
     let b = s.as_bytes();
@@ -179,6 +196,7 @@ fn normalize_owner(s: &str) -> Option<String> {
 }
 
 async fn list_inner(n: AppState, p: RawQ) -> ApiResult<Response> {
+    validate_labels(&p.labels)?;
     let now = reaper::now();
     let filters = ListFilters {
         collection: p.collection.clone(),
@@ -568,6 +586,7 @@ async fn sse_catch_up(
 }
 
 async fn stream_inner(n: AppState, headers: HeaderMap, p: RawQ) -> ApiResult<Response> {
+    validate_labels(&p.labels)?;
     let filters = ListFilters {
         collection: p.collection.clone(),
         labels: p.labels,
@@ -891,6 +910,18 @@ mod tests {
         assert!(sse_matches(&both, &row));
         let missing = ListFilters { labels: vec!["team".into(), "missing".into()], ..Default::default() };
         assert!(!sse_matches(&missing, &row));
+    }
+
+    #[test]
+    fn label_filters_reject_empty_and_duplicates() {
+        let q = parse_raw_query(Some("label=team&label=urgent"));
+        assert_eq!(q.labels, vec!["team".to_string(), "urgent".to_string()]);
+        validate_labels(&q.labels).unwrap();
+
+        let empty = vec![String::new()];
+        assert_eq!(validate_labels(&empty).unwrap_err().code, "bad_label");
+        let duplicate = vec!["team".to_string(), "team".to_string()];
+        assert_eq!(validate_labels(&duplicate).unwrap_err().code, "bad_label");
     }
 
     #[test]
