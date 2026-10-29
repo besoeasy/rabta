@@ -55,15 +55,19 @@ pub fn plan(c: &Connection, caller_filters: &[BloomFilterDto], now: i64) -> Resu
         let (bits, cells) = f.decode().map_err(|e| format!("{e}"))?;
         let their = Bloom { bits, cells };
         let mycount = if f.ftype == "events" { my_events.len() } else { my_blobs.len() };
+        let my_filter = if f.ftype == "events" { &ev_filter } else { &bl_filter };
 
         // steady-state skip: same count + byte-equal cells
-        if f.count == mycount as u64
-            && their.cells == (if f.ftype == "events" { &ev_filter } else { &bl_filter }).cells
-        {
+        if f.count == mycount as u64 && their.cells == my_filter.cells {
             in_sync[f.ftype.as_str()] = json!(true);
             continue;
         }
 
+        // Not an exact mirror. A bloom positive is not proof of possession:
+        // with a count mismatch a false positive can hide a missing key on
+        // every tick, so enumerate every local key and let the caller dedupe.
+        // (Oversized lists rotate their inline slice below so the cap cannot
+        // pin a positive at the front forever.)
         if f.ftype == "events" {
             for (id, created) in &my_events {
                 if id.len() != 32 {
@@ -71,9 +75,7 @@ pub fn plan(c: &Connection, caller_filters: &[BloomFilterDto], now: i64) -> Resu
                 }
                 let mut k = [0u8; 32];
                 k.copy_from_slice(id);
-                if !their.test(SEED_EVENTS, &k) {
-                    missing_events.push((hex::encode(k), *created));
-                }
+                missing_events.push((hex::encode(k), *created));
             }
         } else {
             for hash in &my_blobs {
@@ -82,9 +84,7 @@ pub fn plan(c: &Connection, caller_filters: &[BloomFilterDto], now: i64) -> Resu
                 }
                 let mut k = [0u8; 32];
                 k.copy_from_slice(hash);
-                if !their.test(SEED_BLOBS, &k) {
-                    missing_blobs.push(hex::encode(k));
-                }
+                missing_blobs.push(hex::encode(k));
             }
         }
     }
@@ -92,8 +92,11 @@ pub fn plan(c: &Connection, caller_filters: &[BloomFilterDto], now: i64) -> Resu
     missing_events.sort_by_key(|(_, ca)| *ca);
     missing_blobs.sort();
     let overflow = overflow_windows(&missing_events, &missing_blobs);
-    let ev_inline: Vec<String> = missing_events.iter().take(INLINE_CAP).map(|(h, _)| h.clone()).collect();
-    let bl_inline: Vec<String> = missing_blobs.iter().take(INLINE_CAP).cloned().collect();
+    let ev_inline: Vec<String> = inline_slice(&missing_events, now)
+        .into_iter()
+        .map(|(h, _)| h.clone())
+        .collect();
+    let bl_inline: Vec<String> = inline_slice(&missing_blobs, now).into_iter().cloned().collect();
 
     Ok(json!({
         "v": BLOOM_V,
@@ -106,6 +109,20 @@ pub fn plan(c: &Connection, caller_filters: &[BloomFilterDto], now: i64) -> Resu
             "blobs": BloomFilterDto::from_parts("blobs", my_blobs.len(), &bl_filter),
         },
     }))
+}
+
+/// Inline page of the missing list. Small sets are returned whole; oversized
+/// sets rotate their start each tick so keys beyond the cap cannot be starved.
+fn inline_slice<T>(items: &[T], now: i64) -> Vec<&T> {
+    if items.len() <= INLINE_CAP {
+        return items.iter().collect();
+    }
+    let offset = (now.max(0) as usize) % items.len();
+    items[offset..]
+        .iter()
+        .chain(items[..offset].iter())
+        .take(INLINE_CAP)
+        .collect()
 }
 
 /// ≤8 partitions over MY missing keys (events by created_at, blobs by hash).
@@ -173,5 +190,30 @@ mod tests {
         let out = overflow_windows(&big, &[]);
         assert_eq!(out["events"].as_array().unwrap().len(), 8);
         assert!(out["blobs"].is_null());
+    }
+
+    #[test]
+    fn bloom_false_positive_cannot_hide_missing_events() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(crate::db::SCHEMA).unwrap();
+        for i in 0..3u64 {
+            let mut id = [0u8; 32];
+            id[..8].copy_from_slice(&i.to_le_bytes());
+            c.execute(
+                "INSERT INTO events(id,owner,collection,created_at,expires_at,data,labels,size)
+                 VALUES (?1,?2,'test',900,2000,x'7b7d','[]',2)",
+                rusqlite::params![&id, &[0u8; 32]],
+            )
+            .unwrap();
+        }
+
+        // Caller claims only two keys and its filter says "yes" for everything
+        // (the degenerate version of a bloom false positive).
+        let their = Bloom { bits: 8192, cells: vec![0xff; 1024] };
+        let filter = BloomFilterDto::from_parts("events", 2, &their);
+
+        let out = plan(&c, &[filter], 1000).unwrap();
+        assert_eq!(out["in_sync"]["events"], false);
+        assert_eq!(out["you_are_missing"]["events"].as_array().unwrap().len(), 3);
     }
 }
