@@ -25,7 +25,7 @@ Rabta verifies signatures, stores opaque envelopes, and expires them.
 - Content-addressed blobs (SHA-256) with `Range` and `ETag`
 - TTL on every event — automatic expiry and storage reclamation
 - Live SSE stream with `Last-Event-ID` resume
-- Peer replication via bloom-filter sync, up to 8 peers
+- Peer replication via exact Merkle range reconciliation, up to 8 peers
 - One SQLite file plus a blob directory on one volume
 - Storage watermark and eviction, so the disk never fills up
 
@@ -121,9 +121,12 @@ docker run -d \
   ghcr.io/besoeasy/rabta:latest
 ```
 
-New events push to peers immediately. Every 60 seconds nodes reconcile with a
-bloom-filter exchange, and missing blobs are pulled on read. Sync endpoints are
-unauthenticated — keep them on a private network or behind a proxy.
+New events push to peers immediately. Every 60 seconds nodes reconcile exact
+sorted-key ranges: matching ranges are skipped by count + fingerprint, small
+ranges exchange ids directly, and larger mismatches split by nibble. Event
+bodies move in both directions; blob bodies are pull-only (also healed on read).
+Sync endpoints are unauthenticated — keep them on a private network or behind a
+proxy.
 
 ## Configuration
 

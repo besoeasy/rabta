@@ -2,10 +2,10 @@ pub mod blob_get;
 pub mod blobs_api;
 pub mod events;
 pub mod misc;
-pub mod sync_bloom;
 pub mod sync_ingest;
 pub mod sync_pull;
 pub mod sync_push;
+pub mod sync_ranges;
 
 use std::sync::atomic::AtomicI64;
 

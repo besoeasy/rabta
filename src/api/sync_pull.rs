@@ -1,13 +1,13 @@
 use axum::body::Body;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
-use super::events::{parse_id_hex, run};
+use super::events::{parse_id_hex, read_body_capped, run};
 use super::AppState;
 use crate::error::{ApiError, ApiResult};
 use crate::store::blobs;
@@ -15,6 +15,61 @@ use crate::store::queries;
 use crate::store::reaper;
 
 type Conn = rusqlite::Connection;
+
+const FETCH_BODY_CAP: usize = 256 * 1024;
+const FETCH_ID_CAP: usize = 1000;
+
+#[derive(Deserialize)]
+pub struct FetchRequest {
+    ids: Vec<String>,
+}
+
+// POST /sync/events/fetch — batch envelope read by exact id (≤1000).
+pub async fn fetch_events(State(n): State<AppState>, req: Request<Body>) -> Response {
+    run(fetch_events_inner(n, req).await)
+}
+
+async fn fetch_events_inner(n: AppState, req: Request<Body>) -> ApiResult<Response> {
+    let bytes = read_body_capped(req, FETCH_BODY_CAP).await?;
+    let body: FetchRequest = serde_json::from_slice(&bytes)
+        .map_err(|e| ApiError::bad_json(format!("fetch body must be {{\"ids\":[...]}}: {e}")))?;
+    if body.ids.len() > FETCH_ID_CAP {
+        return Err(ApiError::too_large("fetch exceeds 1000 ids"));
+    }
+
+    let mut ids = Vec::with_capacity(body.ids.len());
+    for id in &body.ids {
+        ids.push(parse_id_hex(id)?);
+    }
+
+    let now = reaper::now();
+    let (events, missing): (Vec<Value>, Vec<String>) = n
+        .db
+        .read(move |c: &Conn| {
+            let mut stmt = c
+                .prepare("SELECT data FROM events WHERE id = ?1 AND state='live' AND expires_at > ?2")
+                .expect("static query");
+            let mut events = Vec::new();
+            let mut missing = Vec::new();
+            for id in ids {
+                match stmt.query_row(rusqlite::params![&id[..], now], |r| r.get::<_, Vec<u8>>(0)) {
+                    Ok(data) => match serde_json::from_slice::<Value>(&data) {
+                        Ok(v) => events.push(v),
+                        Err(_) => missing.push(hex::encode(id)),
+                    },
+                    Err(_) => missing.push(hex::encode(id)),
+                }
+            }
+            (events, missing)
+        })
+        .await;
+
+    Ok((
+        StatusCode::OK,
+        axum::Json(json!({"events": events, "missing": missing})),
+    )
+        .into_response())
+}
 
 // GET /sync/events/{id} — one envelope (sync-plane read)
 pub async fn get_event(State(n): State<AppState>, Path(id): Path<String>) -> Response {

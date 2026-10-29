@@ -28,8 +28,10 @@ pub async fn index(State(n): State<AppState>) -> Json<serde_json::Value> {
         }
     });
     if !n.cfg.sync_nodes.is_empty() {
-        routes["routes"]["POST /sync/bloom"] = json!("bloom planner exchange");
+        routes["routes"]["POST /sync/reconcile"] =
+            json!("exact range reconciliation (protocol v1)");
         routes["routes"]["POST /sync/events"] = json!("push event batch (normal validation)");
+        routes["routes"]["POST /sync/events/fetch"] = json!("batch event envelopes by id");
         routes["routes"]["POST /sync/blobs"] = json!("push blob bodies (normal caps)");
         routes["routes"]["GET /sync/events/{id}"] = json!("pull one event envelope");
         routes["routes"]["GET /sync/events"] = json!("paged pull (seq cursor)");
@@ -70,6 +72,7 @@ pub async fn stats(State(n): State<AppState>) -> impl IntoResponse {
     let idx = &reaper::COUNTERS;
     let pulls = crate::sync::pulls::snapshot();
     let heals = crate::sync::loop_all::heal_snapshot();
+    let rec = crate::sync::reconcile::snapshot();
     let free = crate::config::free_bytes_public(&cfg.data_dir);
     let last_sweep = reaper::last_sweep_at();
     let now = reaper::now();
@@ -107,12 +110,24 @@ pub async fn stats(State(n): State<AppState>) -> impl IntoResponse {
         "sync": {
             "nodes": n.cfg.sync_nodes.len(),
             "interval_s": n.cfg.sync_interval.as_secs(),
+            "accepting": !crate::sync::reconcile::paused(),
             "pulls": {
                 "attempts": pulls.attempts,
                 "succeeded": pulls.succeeded,
                 "failed": pulls.failed,
                 "skipped_backoff": pulls.skipped_backoff,
                 "in_backoff": pulls.in_backoff,
+            },
+            "reconcile": {
+                "probes": rec.probes,
+                "requests": rec.requests,
+                "events_pushed": rec.events_pushed,
+                "events_pulled": rec.events_pulled,
+                "blobs_pulled": rec.blobs_pulled,
+                "skipped_pressure": rec.skipped_pressure,
+                "skipped_peer_full": rec.skipped_peer_full,
+                "queue_overflow": rec.queue_overflow,
+                "queued_ranges": rec.queued_ranges,
             },
             "heals": {
                 "attempts": heals.attempts,

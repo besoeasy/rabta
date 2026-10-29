@@ -141,7 +141,7 @@ fn valid_hash(hash_hex: &str) -> bool {
 /// install it (orphan clock, or attached when live referrers already exist).
 ///
 /// This is the force path (read healing): it ignores backoff but records the
-/// outcome, so a later planner tick won't immediately repeat a failed attempt.
+/// outcome, so a later reconcile pull won't immediately repeat a failed attempt.
 pub async fn pull_blob(n: &AppState, peer: &reqwest::Url, hash_hex: &str) -> bool {
     if !valid_hash(hash_hex) {
         return false;
@@ -158,7 +158,7 @@ pub async fn pull_blob(n: &AppState, peer: &reqwest::Url, hash_hex: &str) -> boo
     ok
 }
 
-/// Planner-facing pull: respects the (peer, hash) failure TTL so genuinely
+/// Reconcile-facing pull: respects the (peer, hash) failure TTL so genuinely
 /// absent blobs are not retried on every peer tick.
 pub async fn pull_blob_with_backoff(n: &AppState, peer: &reqwest::Url, hash_hex: &str) -> bool {
     if !valid_hash(hash_hex) {

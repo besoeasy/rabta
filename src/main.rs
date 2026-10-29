@@ -108,8 +108,9 @@ fn router(state: AppState) -> Router {
         .route("/blobs/{blob}", head(api::blob_get::get));
 
     let sync_routes = Router::new()
-        .route("/sync/bloom", post(api::sync_bloom::bloom).layer(big.clone()))
+        .route("/sync/reconcile", post(api::sync_ranges::reconcile).layer(big.clone()))
         .route("/sync/events", post(api::sync_ingest::post_events).layer(big.clone()))
+        .route("/sync/events/fetch", post(api::sync_pull::fetch_events).layer(big.clone()))
         .route("/sync/blobs", post(api::sync_push::post_blobs).layer(big.clone()))
         .route("/sync/events", get(api::sync_pull::pull_events))
         .route("/sync/events/{id}", get(api::sync_pull::get_event))
