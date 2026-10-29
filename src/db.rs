@@ -1,17 +1,103 @@
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, Mutex};
 
 use rusqlite::Connection;
 
 /// SQLite access layer.
 ///
-/// Concurrency contract (plan.md): reads never block and writes are serialized
-/// through exactly one connection-writer. WAL mode gives readers a snapshot;
-/// the shared `Mutex<Connection>` guarantees one writer at a time without a
-/// second config mechanism. All DB calls run through `spawn_blocking`.
+/// Concurrency contract (plan.md): reads never block writes and writes are
+/// serialized through exactly one connection-writer. WAL mode gives readers
+/// their own snapshots, so a pool of reader connections is used instead of
+/// sharing the writer's mutex. All DB calls run through `spawn_blocking`.
 #[derive(Clone)]
 pub struct Db {
-    inner: Arc<Mutex<Connection>>,
+    writer: Arc<Mutex<Connection>>,
+    readers: Arc<ReaderPool>,
+}
+
+/// A pool of read-only SQLite connections. It starts small and opens extra
+/// readers on demand up to a cap, so concurrent reads never queue behind each
+/// other just because the machine has fewer CPUs. The idle-list lock is held
+/// only while taking/returning a connection, never while a query runs.
+struct ReaderPool {
+    path: PathBuf,
+    state: Mutex<ReaderPoolState>,
+    available: Condvar,
+    max: usize,
+}
+
+struct ReaderPoolState {
+    idle: Vec<Connection>,
+    open: usize,
+}
+
+struct ReaderGuard {
+    pool: Arc<ReaderPool>,
+    conn: Option<Connection>,
+}
+
+const READER_POOL_MAX: usize = 64;
+
+impl ReaderPool {
+    fn new(path: PathBuf, connections: Vec<Connection>) -> ReaderPool {
+        let open = connections.len();
+        ReaderPool {
+            path,
+            state: Mutex::new(ReaderPoolState { idle: connections, open }),
+            available: Condvar::new(),
+            max: READER_POOL_MAX,
+        }
+    }
+
+    fn acquire(self: &Arc<Self>) -> ReaderGuard {
+        loop {
+            let mut state = self.state.lock().expect("db reader mutex poisoned");
+            if let Some(conn) = state.idle.pop() {
+                return ReaderGuard { pool: Arc::clone(self), conn: Some(conn) };
+            }
+            if state.open < self.max {
+                state.open += 1;
+                drop(state);
+                match open_reader(&self.path) {
+                    Ok(conn) => return ReaderGuard { pool: Arc::clone(self), conn: Some(conn) },
+                    Err(_) => {
+                        let mut state = self.state.lock().expect("db reader mutex poisoned");
+                        state.open -= 1;
+                        self.available.notify_one();
+                        let _unused = self
+                            .available
+                            .wait(state)
+                            .expect("db reader condvar poisoned");
+                        continue;
+                    }
+                }
+            }
+            let _unused = self.available.wait(state).expect("db reader condvar poisoned");
+        }
+    }
+
+    fn release(&self, conn: Connection) {
+        let mut state = self.state.lock().expect("db reader mutex poisoned");
+        state.idle.push(conn);
+        self.available.notify_one();
+    }
+}
+
+impl Deref for ReaderGuard {
+    type Target = Connection;
+
+    fn deref(&self) -> &Connection {
+        self.conn.as_ref().expect("reader guard already released")
+    }
+}
+
+impl Drop for ReaderGuard {
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.take() {
+            self.pool.release(conn);
+        }
+    }
 }
 
 pub const MAX_ENVELOPE: usize = 100_000;
@@ -23,41 +109,56 @@ impl Db {
     pub fn open(data_dir: &Path) -> Db {
         let path = data_dir.join("index.db");
         let c = Connection::open(&path).expect("cannot open /data/index.db");
+        configure_connection(&c);
         c.pragma_update(None, "journal_mode", "WAL").ok();
-        c.pragma_update(None, "synchronous", "NORMAL").ok();
-        c.pragma_update(None, "temp_store", "MEMORY").ok();
-        c.busy_timeout(std::time::Duration::from_secs(10)).ok();
         c.execute_batch(SCHEMA).expect("schema init failed");
-        let db = Db { inner: Arc::new(Mutex::new(c)) };
+
+        // One writer + a reader pool. WAL lets readers run against a stable
+        // snapshot while the writer commits; they never share its lock.
+        let reader_count = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .clamp(2, 8);
+        let mut readers = Vec::with_capacity(reader_count);
+        for _ in 0..reader_count {
+            readers.push(open_reader(&path).expect("cannot open read connection"));
+        }
+
+        let db = Db {
+            writer: Arc::new(Mutex::new(c)),
+            readers: Arc::new(ReaderPool::new(path, readers)),
+        };
         reconcile_counters(&db);
         db
     }
 
-    /// Run a closure against the connection inside a blocking task.
-    /// Writes and builds that mutate state run here; one writer at a time.
+    /// Run a closure against the single writer connection inside a blocking
+    /// task; writes are serialized, readers are not.
     pub async fn write<T, F>(&self, f: F) -> T
     where
         F: FnOnce(&Connection) -> T + Send + 'static,
         T: Send + 'static,
     {
-        let inner = self.inner.clone();
+        let writer = self.writer.clone();
         tokio::task::spawn_blocking(move || {
-            let c = inner.lock().expect("db mutex poisoned");
+            let c = writer.lock().expect("db mutex poisoned");
             f(&c)
         })
         .await
         .expect("db write task panicked")
     }
 
-    /// Read-only closure; short queries only.
+    /// Read-only closure on a pooled connection; short queries only. The
+    /// connection is checked out for the duration of `f`, so concurrent reads
+    /// proceed independently and never queue behind a writer.
     pub async fn read<T, F>(&self, f: F) -> T
     where
         F: FnOnce(&Connection) -> T + Send + 'static,
         T: Send + 'static,
     {
-        let inner = self.inner.clone();
+        let pool = self.readers.clone();
         tokio::task::spawn_blocking(move || {
-            let c = inner.lock().expect("db mutex poisoned");
+            let c = pool.acquire();
             f(&c)
         })
         .await
@@ -65,11 +166,24 @@ impl Db {
     }
 }
 
+fn open_reader(path: &Path) -> rusqlite::Result<Connection> {
+    let c = Connection::open(path)?;
+    configure_connection(&c);
+    c.pragma_update(None, "query_only", true).ok();
+    Ok(c)
+}
+
+fn configure_connection(c: &Connection) {
+    c.pragma_update(None, "synchronous", "NORMAL").ok();
+    c.pragma_update(None, "temp_store", "MEMORY").ok();
+    c.busy_timeout(std::time::Duration::from_secs(10)).ok();
+}
+
 /// Recompute the live_bytes counters from the tables themselves — a periodic
 /// hygiene pass, and the boot-time repair. `live_bytes` is normally maintained
 /// per transaction, never recomputed.
 fn reconcile_counters(db: &Db) {
-    let c = db.inner.lock().expect("poisoned");
+    let c = db.writer.lock().expect("poisoned");
     let mut stmt = c.prepare("SELECT COALESCE(SUM(size),0) FROM events WHERE state='live'").unwrap();
     let ev: i64 = stmt.query_row([], |r| r.get(0)).unwrap_or(0);
     let mut stmt = c.prepare("SELECT COALESCE(SUM(size),0) FROM blobs WHERE state='live'").unwrap();
@@ -158,5 +272,37 @@ pub fn bump_counters(c: &Connection, events_delta: i64, blobs_delta: i64) {
             [blobs_delta],
         )
         .ok();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+        let dir = std::env::temp_dir().join(format!("rabta-{tag}-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn reads_do_not_share_the_writer_lock() {
+        let dir = temp_dir("db-readers");
+        let db = Db::open(&dir);
+
+        // Simulate an in-flight write holding the writer connection.
+        let writer = db.writer.lock().unwrap();
+        let read = tokio::time::timeout(
+            Duration::from_secs(1),
+            db.read(|c| c.query_row("SELECT 1", [], |r| r.get::<_, i64>(0)).unwrap()),
+        )
+        .await;
+        drop(writer);
+
+        assert_eq!(read.expect("read blocked behind the writer"), 1);
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
