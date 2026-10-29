@@ -14,6 +14,8 @@ use rusqlite::Connection;
 pub struct Db {
     writer: Arc<Mutex<Connection>>,
     readers: Arc<ReaderPool>,
+    /// Wakes the shared SSE feed after a committed event insert.
+    events_changed: Arc<tokio::sync::Notify>,
 }
 
 /// A pool of read-only SQLite connections. It starts small and opens extra
@@ -127,6 +129,7 @@ impl Db {
         let db = Db {
             writer: Arc::new(Mutex::new(c)),
             readers: Arc::new(ReaderPool::new(path, readers)),
+            events_changed: Arc::new(tokio::sync::Notify::new()),
         };
         reconcile_counters(&db);
         db
@@ -136,6 +139,17 @@ impl Db {
     /// state (e.g. the shared SSE feed) when several `Db`s exist in-process.
     pub fn path(&self) -> &Path {
         &self.readers.path
+    }
+
+    /// Wake the shared SSE feed after committing new event rows. Callers may
+    /// signal after a batch; notifications coalesce.
+    pub fn notify_event_row(&self) {
+        self.events_changed.notify_one();
+    }
+
+    /// Resolve on the next event-row signal (or immediately if one is queued).
+    pub async fn wait_for_event_row(&self) {
+        self.events_changed.notified().await;
     }
 
     /// Run a closure against the single writer connection inside a blocking

@@ -89,5 +89,9 @@ pub async fn store_envelope(n: &AppState, bytes: Vec<u8>) -> ApiResult<bool> {
             Ok(ins)
         })
         .await;
+    if matches!(out, Ok(true)) {
+        // Wake SSE only after the write transaction has committed.
+        n.db.notify_event_row();
+    }
     out
 }

@@ -61,6 +61,7 @@ pub async fn publish_envelope(n: AppState, bytes: Vec<u8>) -> ApiResult<Response
     // Origin fan-out (decision #16): accepted events push to every trusted
     // peer immediately; inbound sync ingest never re-fans.
     if inserted {
+        n.db.notify_event_row();
         crate::sync::loop_all::push_event_to_peers(&n, ev.served_bytes.clone());
     }
 
@@ -333,8 +334,7 @@ impl Drop for SseGuard {
 }
 
 /// One live row, broadcast to every SSE subscriber. Each subscriber applies its
-/// own filters in memory, so the shared feed needs exactly one DB query per
-/// tick regardless of subscriber count.
+/// own filters in memory, so one shared feed serves every subscriber.
 struct SseRow {
     rowid: i64,
     collection: String,
@@ -355,46 +355,91 @@ type SseFeed = tokio::sync::broadcast::Sender<std::sync::Arc<SseRow>>;
 static SSE_FEEDS: OnceLock<tokio::sync::Mutex<std::collections::HashMap<std::path::PathBuf, SseFeed>>> =
     OnceLock::new();
 const SSE_FEED_CAPACITY: usize = 2048;
-const SSE_FEED_POLL: std::time::Duration = std::time::Duration::from_millis(300);
+const SSE_FEED_BATCH: i64 = 1000;
 
-/// Start (once) and return the shared feed for this database. Its cursor is
-/// initialized before the caller subscribes and captures its high-water mark,
-/// so no committed row can slip between the two.
-async fn ensure_sse_feed(db: &crate::db::Db) -> SseFeed {
-    let feeds = SSE_FEEDS.get_or_init(|| tokio::sync::Mutex::new(std::collections::HashMap::new()));
-    let mut feeds = feeds.lock().await;
+fn sse_feeds() -> &'static tokio::sync::Mutex<std::collections::HashMap<std::path::PathBuf, SseFeed>>
+{
+    SSE_FEEDS.get_or_init(|| tokio::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Start (once) the shared feed for this database and subscribe to it. The
+/// subscription is created while the feed map is locked, so the feed cannot
+/// retire itself between handing out the sender and the caller subscribing.
+async fn ensure_sse_feed(
+    db: &crate::db::Db,
+) -> tokio::sync::broadcast::Receiver<std::sync::Arc<SseRow>> {
+    let mut feeds = sse_feeds().lock().await;
     if let Some(tx) = feeds.get(db.path()) {
-        return tx.clone();
+        return tx.subscribe();
     }
 
-    let from = db.clone();
-    let cursor = from
+    let cursor = db
         .read(|c: &Connection| {
             c.query_row("SELECT COALESCE(MAX(rowid),0) FROM events", [], |r| r.get(0))
                 .unwrap_or(0)
         })
         .await;
     let (tx, _) = tokio::sync::broadcast::channel(SSE_FEED_CAPACITY);
+    let rx = tx.subscribe();
     feeds.insert(db.path().to_path_buf(), tx.clone());
-    tokio::spawn(sse_feed_loop(from, tx.clone(), cursor));
-    tx
+    tokio::spawn(sse_feed_loop(db.clone(), db.path().to_path_buf(), tx, cursor));
+    rx
 }
 
-async fn sse_feed_loop(db: crate::db::Db, tx: SseFeed, mut cursor: i64) {
+/// Drain committed rows, then sleep until ingest signals another insert. With
+/// no subscribers the feed removes itself, so an idle node does no SSE DB work.
+async fn sse_feed_loop(
+    db: crate::db::Db,
+    path: std::path::PathBuf,
+    tx: SseFeed,
+    mut cursor: i64,
+) {
     loop {
-        let from = cursor;
-        let rows = db
-            .read(move |c: &Connection| read_sse_rows(c, from, 1000))
-            .await
-            .unwrap_or_default();
-        if let Some(last) = rows.last() {
-            cursor = last.rowid;
+        // Read until a short batch, so a burst is fully drained before sleeping.
+        loop {
+            let from = cursor;
+            let rows = db
+                .read(move |c: &Connection| read_sse_rows(c, from, SSE_FEED_BATCH))
+                .await
+                .unwrap_or_default();
+            let full = rows.len() as i64 == SSE_FEED_BATCH;
+            if let Some(last) = rows.last() {
+                cursor = last.rowid;
+            }
+            for row in rows {
+                let _ = tx.send(std::sync::Arc::new(row));
+            }
+            if !full {
+                break;
+            }
         }
-        for row in rows {
-            let _ = tx.send(std::sync::Arc::new(row));
+
+        if tx.receiver_count() == 0 && retire_sse_feed(&path, &tx).await {
+            tracing::debug!(path = %path.display(), "sse feed retired (no subscribers)");
+            return;
         }
-        tokio::time::sleep(SSE_FEED_POLL).await;
+        tokio::select! {
+            _ = db.wait_for_event_row() => {}
+            _ = tx.closed() => {}
+        }
     }
+}
+
+/// Remove a feed only while holding the map lock and re-checking the receiver
+/// count, so a subscriber that attaches during shutdown is never stranded.
+async fn retire_sse_feed(path: &std::path::Path, tx: &SseFeed) -> bool {
+    let mut feeds = sse_feeds().lock().await;
+    let Some(current) = feeds.get(path) else {
+        return true; // already removed; no channel left to serve
+    };
+    if !current.same_channel(tx) {
+        return true; // superseded by a newer feed for this path
+    }
+    if tx.receiver_count() == 0 {
+        feeds.remove(path);
+        return true;
+    }
+    false
 }
 
 /// Read rows in rowid order without an expiry predicate: the cursor must move
@@ -529,7 +574,7 @@ async fn stream_inner(n: AppState, headers: HeaderMap, p: RawQ) -> ApiResult<Res
 
         // Subscribe before taking the high-water mark. Rows committed while
         // the backlog is fetched are then either in that backlog or queued.
-        let mut feed = ensure_sse_feed(&db).await.subscribe();
+        let mut feed = ensure_sse_feed(&db).await;
         let high_water = db
             .read(|c: &Connection| {
                 c.query_row("SELECT COALESCE(MAX(rowid),0) FROM events", [], |r| r.get(0))
@@ -625,7 +670,6 @@ mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use sha2::{Digest, Sha256};
-    use std::sync::Arc;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     fn temp_dir(tag: &str) -> std::path::PathBuf {
@@ -635,29 +679,32 @@ mod tests {
         dir
     }
 
-    #[tokio::test]
-    async fn publish_returns_json_content_type() {
-        let dir = temp_dir("event-content-type");
-        let db = crate::db::Db::open(&dir);
+    fn test_state(dir: &std::path::Path) -> AppState {
         let cfg = crate::config::Config {
             port: 0,
-            data_dir: dir.clone(),
+            data_dir: dir.to_path_buf(),
             storage_max: 10_000_000,
             storage_clamped: false,
             storage_max_configured: 10_000_000,
             max_single_blob: 1_000_000,
             watermark_bytes: 9_000_000,
             eviction_target_bytes: 8_500_000,
-            sse_subscriber_cap: 1,
+            sse_subscriber_cap: 16,
             sync_nodes: Vec::new(),
             sync_interval: Duration::from_secs(60),
         };
-        let n: AppState = Arc::new(crate::api::Node {
+        std::sync::Arc::new(crate::api::Node {
             cfg,
-            db,
+            db: crate::db::Db::open(dir),
             http: reqwest::Client::new(),
             started_at: reaper::now(),
-        });
+        })
+    }
+
+    #[tokio::test]
+    async fn publish_returns_json_content_type() {
+        let dir = temp_dir("event-content-type");
+        let n = test_state(&dir);
 
         let now = reaper::now();
         let created_at = now - 10;
@@ -699,6 +746,94 @@ mod tests {
             Some("application/json")
         );
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Insert one live row directly (the HTTP and sync ingest doors add the
+    /// same notify call after their committed write).
+    async fn insert_chat_row(n: &AppState) {
+        let now = reaper::now();
+        let served = br#"{"collection":"chat","data":{"n":1}}"#.to_vec();
+        let size = served.len() as i64;
+        n.db.write(move |c: &Connection| {
+            c.execute(
+                "INSERT INTO events(id,owner,collection,created_at,expires_at,data,labels,size,state)
+                 VALUES (?1,?2,'chat',?3,?4,?5,'[]',?6,'live')",
+                rusqlite::params![&[1u8; 32], &[9u8; 32], now - 1, now + 3600, &served, size],
+            )
+            .unwrap();
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn feed_wakes_on_event_signal_and_retires_idle() {
+        let dir = temp_dir("event-feed-wake");
+        let n = test_state(&dir);
+        let mut feed = ensure_sse_feed(&n.db).await;
+
+        insert_chat_row(&n).await;
+        n.db.notify_event_row();
+
+        let row = tokio::time::timeout(Duration::from_secs(2), feed.recv())
+            .await
+            .expect("feed did not wake on event signal")
+            .expect("feed closed before delivering the row");
+        assert_eq!(row.rowid, 1);
+        assert_eq!(row.collection, "chat");
+        assert_eq!(row.state, "live");
+
+        // With its last receiver gone the feed must remove itself, leaving an
+        // idle node with no SSE database work.
+        drop(feed);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if !sse_feeds().lock().await.contains_key(n.db.path()) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("idle feed did not retire");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn stream_replays_backlog_on_resume() {
+        use futures_util::StreamExt;
+
+        let dir = temp_dir("event-stream-resume");
+        let n = test_state(&dir);
+
+        // Resume from the start so the row is delivered whether it is committed
+        // before or after the subscriber captures its high-water mark.
+        let mut headers = HeaderMap::new();
+        headers.insert("last-event-id", axum::http::HeaderValue::from_static("0"));
+        let resp = stream_inner(
+            n.clone(),
+            headers,
+            RawQ { collection: Some("chat".into()), ..Default::default() },
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let mut body = resp.into_body().into_data_stream();
+
+        insert_chat_row(&n).await;
+        n.db.notify_event_row();
+
+        let frame = tokio::time::timeout(Duration::from_secs(2), body.next())
+            .await
+            .expect("stream did not deliver the resumed row")
+            .expect("event stream ended")
+            .unwrap();
+        let text = String::from_utf8_lossy(&frame);
+        assert!(text.contains("event: message"), "unexpected frame: {text}");
+        assert!(text.contains("\"collection\":\"chat\""), "unexpected frame: {text}");
+
+        drop(body);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
