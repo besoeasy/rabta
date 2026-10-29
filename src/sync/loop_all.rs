@@ -1,11 +1,16 @@
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use serde_json::{json, Value};
 
 use super::client_push;
 use super::filters;
 use crate::api::AppState;
 use crate::api::sync_ingest;
+
+/// Bound on concurrent blob pulls per peer tick. Pulls are hash-verified and
+/// independent; a small window keeps one slow peer from serializing the tick.
+const BLOB_PULL_CONCURRENCY: usize = 4;
 
 
 fn join(peer: &reqwest::Url, path: &str) -> reqwest::Url {
@@ -90,13 +95,23 @@ async fn tick(n: &AppState, peer: &reqwest::Url) -> bool {
     }
 
     if !in_sync_bl {
-        let hashes = reply["you_are_missing"]["blobs"]
+        let hashes: Vec<String> = reply["you_are_missing"]["blobs"]
             .as_array()
-            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect::<Vec<_>>())
+            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
             .unwrap_or_default();
-        for hash_hex in hashes {
-            super::pulls::pull_blob(n, peer, &hash_hex).await;
-        }
+        let pulls = futures_util::stream::iter(hashes)
+            .filter(|hash_hex| {
+                let valid = hash_hex.len() == 64
+                    && hash_hex.bytes().all(|b| b.is_ascii_hexdigit());
+                async move { valid }
+            })
+            .map(|hash_hex| {
+                let app = AppState::clone(n);
+                let peer = reqwest::Url::clone(peer);
+                async move { super::pulls::pull_blob(&app, &peer, &hash_hex).await }
+            })
+            .buffer_unordered(BLOB_PULL_CONCURRENCY);
+        let _pulled: Vec<bool> = pulls.collect().await;
     }
 
     // The responder-lacks direction (I hold, it lacks) → push events now;

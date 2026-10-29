@@ -4,6 +4,8 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock};
 
 use super::events::{parse_id_hex, run};
 use super::AppState;
@@ -90,27 +92,73 @@ pub async fn get_blob(State(n): State<AppState>, Path(hash_hex): Path<String>) -
     run(get_blob_inner(n, hash_hex).await)
 }
 
+async fn blob_size(n: &AppState, hash: [u8; 32]) -> Option<i64> {
+    n.db.read(move |c: &Conn| {
+        c.query_row(
+            "SELECT size FROM blobs WHERE hash = ?1 AND state='live'",
+            [&hash],
+            |r| r.get(0),
+        )
+        .ok()
+    })
+    .await
+}
+
+/// One in-flight heal per hash per process: a missing blob asked for by a
+/// peer must not recursively fan out through the mesh.
+fn healing_set() -> &'static Mutex<HashSet<[u8; 32]>> {
+    static HEALING: OnceLock<Mutex<HashSet<[u8; 32]>>> = OnceLock::new();
+    HEALING.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+struct HealGuard([u8; 32]);
+impl Drop for HealGuard {
+    fn drop(&mut self) {
+        if let Ok(mut set) = healing_set().lock() {
+            set.remove(&self.0);
+        }
+    }
+}
+
+fn begin_heal(hash: &[u8; 32]) -> Option<HealGuard> {
+    let mut set = healing_set().lock().ok()?;
+    if set.insert(*hash) { Some(HealGuard(*hash)) } else { None }
+}
+
 async fn get_blob_inner(n: AppState, hash_hex: String) -> ApiResult<Response> {
     if hash_hex.len() != 64 || !hash_hex.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(ApiError::not_found("not a valid blob hash"));
     }
     let mut hash = [0u8; 32];
     hash.copy_from_slice(&hex::decode(&hash_hex).expect("checked"));
-    let size: i64 = n
-        .db
-        .read(move |c: &Conn| {
-            c.query_row(
-                "SELECT size FROM blobs WHERE hash = ?1 AND state='live'",
-                [&hash],
-                |r| r.get(0),
-            )
-            .ok()
-        })
-        .await
-        .ok_or_else(|| ApiError::not_found("no such blob"))?;
 
-    let path = blobs::blob_path(&n.cfg.data_dir, &hex::encode(hash));
-    let file = tokio::fs::File::open(&path).await.map_err(|_| ApiError::not_found("no such blob"))?;
+    let resolved_hex = hex::encode(hash);
+    let path = blobs::blob_path(&n.cfg.data_dir, &resolved_hex);
+    let mut size = blob_size(&n, hash).await;
+    let mut opened = if size.is_some() {
+        Some(tokio::fs::File::open(&path).await)
+    } else {
+        None
+    };
+
+    // Row without bytes (or no row at all): repair from a trusted peer, then
+    // serve the request instead of handing the caller a false 404.
+    let missing_file =
+        matches!(&opened, Some(Err(e)) if e.kind() == std::io::ErrorKind::NotFound);
+    if (size.is_none() || missing_file) && !n.cfg.sync_nodes.is_empty() {
+        if let Some(_healing) = begin_heal(&hash) {
+            if crate::sync::loop_all::fetch_blob_from_peers(&n, &resolved_hex).await {
+                size = blob_size(&n, hash).await;
+                opened = Some(tokio::fs::File::open(&path).await);
+            }
+        }
+    }
+
+    let Some(size) = size else { return Err(ApiError::not_found("no such blob")) };
+    let file = match opened {
+        Some(Ok(f)) => f,
+        _ => return Err(ApiError::not_found("no such blob")),
+    };
     Ok(axum::http::Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/octet-stream")
@@ -118,4 +166,18 @@ async fn get_blob_inner(n: AppState, hash_hex: String) -> ApiResult<Response> {
         .header(header::CONTENT_LENGTH, size.to_string())
         .body(Body::from_stream(tokio_util::io::ReaderStream::new(file)))
         .expect("static response"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blob_healing_is_single_flight() {
+        let hash = [3u8; 32];
+        let guard = begin_heal(&hash).expect("first heal should start");
+        assert!(begin_heal(&hash).is_none(), "recursive heal was allowed");
+        drop(guard);
+        assert!(begin_heal(&hash).is_some(), "heal guard did not release");
+    }
 }
