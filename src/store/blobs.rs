@@ -200,12 +200,18 @@ pub async fn install_staged(
 
     let outcome = match db
         .write(move |c: &rusqlite::Connection| -> rusqlite::Result<Install> {
-            let (ev, bl) = crate::db::live_bytes(c);
-            if (ev + bl + size as i64) as u64 > water {
-                crate::store::reaper::evict_pass(c, &cfg2);
-                let (ev2, bl2) = crate::db::live_bytes(c);
-                if (ev2 + bl2 + size as i64) as u64 > water {
-                    // cannot free enough — the insert below will refuse
+            // A duplicate install adds no bytes: never evict for a retry.
+            let exists: i64 = c.query_row(
+                "SELECT EXISTS(SELECT 1 FROM blobs WHERE hash = ?1)",
+                [&hash],
+                |r| r.get(0),
+            )?;
+            if exists == 0 {
+                // Demand-aware admission: make room for this blob (or refuse)
+                // before the row insert, so eviction is charged to a write
+                // that can actually be accepted.
+                if crate::store::reaper::pressure_check(c, &cfg2, size).is_err() {
+                    return Ok(Install::Refused);
                 }
             }
             let r = insert_blob_row(c, &hash, size, now, water)?;

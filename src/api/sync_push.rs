@@ -46,7 +46,7 @@ async fn post_blobs_inner(n: AppState, req: Request<Body>) -> ApiResult<Response
 /// Stream a raw body through the sink.
 async fn stream_body(n: &AppState, req: Request<Body>) -> ApiResult<Staged> {
     let (live_events, live_blobs) = n.db.read(|c: &rusqlite::Connection| crate::db::live_bytes(c)).await;
-    let mut sink = BlobSink::start(&n.cfg.data_dir, live_events + live_blobs, n.cfg.watermark_bytes, n.cfg.max_single_blob)?;
+    let mut sink = BlobSink::start(&n.cfg.data_dir, live_events + live_blobs, n.cfg.storage_max, n.cfg.max_single_blob)?;
     let mut stream = req.into_body().into_data_stream();
     use futures_util::StreamExt;
     while let Some(chunk) = stream.next().await {

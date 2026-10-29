@@ -42,7 +42,7 @@ async fn put_inner(n: AppState, name: String, req: Request<Body>) -> ApiResult<R
     let mut sink = BlobSink::start(
         &n.cfg.data_dir,
         live_events + live_blobs,
-        n.cfg.watermark_bytes,
+        n.cfg.storage_max,
         n.cfg.max_single_blob,
     )?;
 
