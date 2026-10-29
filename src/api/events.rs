@@ -336,6 +336,26 @@ impl Drop for SseGuard {
     }
 }
 
+/// Atomically reserve a subscriber slot. The old load-then-increment dance let
+/// concurrent requests all pass the check and oversubscribe the cap.
+fn try_acquire_sse_slot(active: &std::sync::atomic::AtomicI64, cap: i64) -> bool {
+    let mut current = active.load(Ordering::Acquire);
+    loop {
+        if current >= cap {
+            return false;
+        }
+        match active.compare_exchange_weak(
+            current,
+            current + 1,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return true,
+            Err(actual) => current = actual,
+        }
+    }
+}
+
 /// One live row, broadcast to every SSE subscriber. Each subscriber applies its
 /// own filters in memory, so one shared feed serves every subscriber.
 struct SseRow {
@@ -548,11 +568,6 @@ async fn sse_catch_up(
 }
 
 async fn stream_inner(n: AppState, headers: HeaderMap, p: RawQ) -> ApiResult<Response> {
-    let cap = n.cfg.sse_subscriber_cap as i64;
-    if SSE_ACTIVE.load(Ordering::Relaxed) >= cap {
-        return Err(ApiError::subscriber_cap());
-    }
-
     let filters = ListFilters {
         collection: p.collection.clone(),
         labels: p.labels,
@@ -564,6 +579,12 @@ async fn stream_inner(n: AppState, headers: HeaderMap, p: RawQ) -> ApiResult<Res
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.parse::<i64>().ok());
 
+    // Reserve the slot before spawning; the guard releases it when the
+    // connection task ends. No await between this CAS and the spawn.
+    if !try_acquire_sse_slot(&SSE_ACTIVE, n.cfg.sse_subscriber_cap as i64) {
+        return Err(ApiError::subscriber_cap());
+    }
+
     use tokio::sync::mpsc;
     use tokio_stream::wrappers::ReceiverStream;
 
@@ -572,7 +593,6 @@ async fn stream_inner(n: AppState, headers: HeaderMap, p: RawQ) -> ApiResult<Res
 
     tokio::spawn(async move {
         // subscriber accounting lives with the connection, not the response
-        SSE_ACTIVE.fetch_add(1, Ordering::Relaxed);
         let _guard = SseGuard;
 
         // Subscribe before taking the high-water mark. Rows committed while
@@ -883,5 +903,24 @@ mod tests {
         let canonical = format!("ed25519:{}", "AB".repeat(32));
         let ok = owner_filter_for(&Some(canonical)).unwrap();
         assert_eq!(ok, Some("ab".repeat(32)));
+    }
+
+    #[test]
+    fn subscriber_slots_are_never_oversubscribed() {
+        use std::sync::atomic::AtomicUsize;
+
+        let active = std::sync::atomic::AtomicI64::new(0);
+        let admitted = AtomicUsize::new(0);
+        std::thread::scope(|s| {
+            for _ in 0..64 {
+                s.spawn(|| {
+                    if try_acquire_sse_slot(&active, 8) {
+                        admitted.fetch_add(1, Ordering::Relaxed);
+                    }
+                });
+            }
+        });
+        assert_eq!(admitted.load(Ordering::Relaxed), 8);
+        assert_eq!(active.load(Ordering::Relaxed), 8);
     }
 }

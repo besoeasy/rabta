@@ -7,7 +7,7 @@ pub mod sync_ingest;
 pub mod sync_pull;
 pub mod sync_push;
 
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::AtomicI64;
 
 use crate::config::Config;
 use crate::db::Db;
@@ -22,10 +22,5 @@ pub struct Node {
 
 pub type AppState = std::sync::Arc<Node>;
 
-/// Live SSE subscriber count + the configured cap (set once at boot).
+/// Live SSE subscriber count. Admission is a CAS against the configured cap.
 pub static SSE_ACTIVE: AtomicI64 = AtomicI64::new(0);
-pub static SSE_CAP_LIMIT: AtomicI64 = AtomicI64::new(256);
-
-pub fn sse_set_cap(cap: usize) {
-    SSE_CAP_LIMIT.store(cap as i64, Ordering::Relaxed);
-}

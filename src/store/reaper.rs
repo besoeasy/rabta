@@ -1,11 +1,15 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use rusqlite::Connection;
 
 use crate::config::Config;
 use crate::db::Db;
+
+/// Periodic maintenance cadence. The startup pass runs immediately; after
+/// that, idle nodes still reclaim expired/orphan data without waiting an hour.
+pub const REAPER_INTERVAL: Duration = Duration::from_secs(300);
 
 pub fn now() -> i64 {
     SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs() as i64

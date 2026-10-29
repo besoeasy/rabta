@@ -7,7 +7,6 @@ mod store;
 mod sync;
 
 use std::net::SocketAddr;
-use std::time::Duration;
 
 use axum::routing::{get, head, post, put};
 use axum::Router;
@@ -37,7 +36,6 @@ async fn main() {
     }
 
     let cfg = config::Config::load();
-    api::sse_set_cap(cfg.sse_subscriber_cap);
     let port = cfg.port;
 
     let database = db::Db::open(&dir);
@@ -46,6 +44,9 @@ async fn main() {
     if let Err(e) = store::blobs::boot_hygiene(&db2, dir2).await {
         panic!("boot hygiene failed: {e}");
     }
+
+    // Apply expiry + watermark immediately instead of waiting one interval.
+    store::reaper::reaper_tick(&database, cfg.clone()).await;
 
     let state: AppState = std::sync::Arc::new(api::Node {
         cfg: cfg.clone(),
@@ -56,13 +57,16 @@ async fn main() {
 
     let app = router(state.clone());
 
-    // Reaper: hourly expiry sweep (Layer 1) + pressure cleanup.
+    // Reaper: expiry sweep (Layer 1) + pressure cleanup every 5 minutes.
     {
         let db = database.clone();
         let rcfg = cfg.clone();
         tokio::spawn(async move {
+            let start = tokio::time::Instant::now() + store::reaper::REAPER_INTERVAL;
+            let mut ticker = tokio::time::interval_at(start, store::reaper::REAPER_INTERVAL);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
-                tokio::time::sleep(Duration::from_secs(3600)).await;
+                ticker.tick().await;
                 store::reaper::reaper_tick(&db, rcfg.clone()).await;
             }
         });
