@@ -8,6 +8,10 @@
 [![Docker](https://img.shields.io/badge/Docker-amd64%20%7C%20arm64-2496ED?logo=docker&logoColor=white)](https://github.com/besoeasy/rabta/pkgs/container/rabta)
 [![Sync protocol](https://img.shields.io/badge/sync%20protocol-v1-6f42c1)](src/sync/ranges.rs)
 
+<p align="center">
+  <img src="assets/social-preview.png" alt="Rabta — self-hosted zero-knowledge backend for signed events, content-addressed blobs, and realtime sync" width="100%">
+</p>
+
 Rabta is the backend you run when you want to **ship the product, not the infrastructure**. It stores signed events and content-addressed blobs, streams changes over SSE, expires data automatically, and replicates to peers — all from one Rust binary, one SQLite file, and one Docker container.
 
 **No accounts. No app schema. No database server. No vendor lock-in.**
@@ -51,6 +55,10 @@ docker run -d \
 curl -s http://localhost:3232/healthz
 # {"status":"ok","live_events":0,"live_blobs":0}
 ```
+
+<p align="center">
+  <img src="assets/terminal-demo.png" alt="Rabta quick start: run the Docker container, publish a signed event, stream over SSE, and check stats" width="100%">
+</p>
 
 That's it. Your backend is live at `http://localhost:3232`. The root route returns a machine-readable index of every endpoint.
 

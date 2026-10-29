@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#070b14"/>
+      <stop offset="0.55" stop-color="#0a1120"/>
+      <stop offset="1" stop-color="#0d172a"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#45e0c1"/>
+      <stop offset="1" stop-color="#6c8cff"/>
+    </linearGradient>
+    <radialGradient id="glow1" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#6c8cff" stop-opacity="0.24"/>
+      <stop offset="1" stop-color="#6c8cff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#45e0c1" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#45e0c1" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#ffffff" stroke-opacity="0.045" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#grid)"/>
+  <ellipse cx="1110" cy="80" rx="420" ry="300" fill="url(#glow1)"/>
+  <ellipse cx="160" cy="610" rx="420" ry="260" fill="url(#glow2)"/>
+
+  <!-- brand -->
+  <rect x="72" y="62" width="66" height="66" rx="18" fill="url(#accent)"/>
+  <text x="105" y="108" text-anchor="middle" font-family="Noto Sans, Liberation Sans, sans-serif" font-size="38" font-weight="800" fill="#06101c">R</text>
+  <text x="156" y="102" font-family="Noto Sans, Liberation Sans, sans-serif" font-size="44" font-weight="800" letter-spacing="-1" fill="#f3f7ff">rabta</text>
+  <text x="158" y="126" font-family="Noto Sans, Liberation Sans, sans-serif" font-size="11.5" font-weight="700" letter-spacing="3.2" fill="#708099">SELF-HOSTED BACKEND</text>
+
+  <rect x="998" y="66" width="210" height="38" rx="19" fill="#0c1728" stroke="#263752"/>
+  <circle cx="1020" cy="85" r="4.5" fill="#45e0c1"/>
+  <text x="1034" y="90" font-family="Noto Sans, Liberation Sans, sans-serif" font-size="12" font-weight="700" letter-spacing="1.4" fill="#a9b8ce">SELF-HOSTED</text>
+
+  <!-- headline -->
+  <text x="72" y="246" font-family="Noto Sans, Liberation Sans, sans-serif" font-size="63" font-weight="800" letter-spacing="-2" fill="#f5f8ff">The backend you</text>
+  <text x="72" y="318" font-family="Noto Sans, Liberation Sans, sans-serif" font-size="63" font-weight="800" letter-spacing="-2" fill="#f5f8ff">don't have to build.</text>
+
+  <text x="72" y="374" font-family="Noto Sans, Liberation Sans, sans-serif" font-size="22" font-weight="400" fill="#aab7cb">Signed events, content-addressed blobs, and realtime sync.</text>
+  <text x="72" y="405" font-family="Noto Sans, Liberation Sans, sans-serif" font-size="22" font-weight="400" fill="#aab7cb">One Rust binary. One SQLite file. One Docker container.</text>
+
+  <!-- chips -->
+  <g font-family="Noto Sans, Liberation Sans, sans-serif" font-size="14.5" font-weight="600" fill="#c9d5e8">
+    <rect x="72" y="452" width="70" height="40" rx="20" fill="#0c1626" stroke="#273952"/>
+    <text x="107" y="478" text-anchor="middle">Rust</text>
+    <rect x="154" y="452" width="86" height="40" rx="20" fill="#0c1626" stroke="#273952"/>
+    <text x="197" y="478" text-anchor="middle">SQLite</text>
+    <rect x="252" y="452" width="62" height="40" rx="20" fill="#0c1626" stroke="#273952"/>
+    <text x="283" y="478" text-anchor="middle">SSE</text>
+    <rect x="326" y="452" width="94" height="40" rx="20" fill="#0c1626" stroke="#273952"/>
+    <text x="373" y="478" text-anchor="middle">Ed25519</text>
+    <rect x="432" y="452" width="112" height="40" rx="20" fill="#0c1626" stroke="#273952"/>
+    <text x="488" y="478" text-anchor="middle">Peer sync</text>
+  </g>
+
+  <text x="72" y="562" font-family="Noto Sans, Liberation Sans, sans-serif" font-size="15" font-weight="600" fill="#7e8da7">github.com/besoeasy/rabta</text>
+  <text x="72" y="592" font-family="Noto Sans, Liberation Sans, sans-serif" font-size="14" fill="#58677f">Events · Blobs · SSE · TTL retention · Exact range replication</text>
+
+  <!-- terminal card -->
+  <rect x="744" y="128" width="464" height="408" rx="20" fill="#0a1322" stroke="#22314a"/>
+  <rect x="744" y="128" width="464" height="48" rx="20" fill="#0e192b"/>
+  <rect x="744" y="156" width="464" height="20" fill="#0e192b"/>
+  <circle cx="770" cy="152" r="5.5" fill="#ff6b6b"/>
+  <circle cx="790" cy="152" r="5.5" fill="#f6c85f"/>
+  <circle cx="810" cy="152" r="5.5" fill="#45e0c1"/>
+  <text x="832" y="157" font-family="Noto Sans Mono, Liberation Mono, monospace" font-size="12.5" fill="#7d8da7">quick start</text>
+  <rect x="1124" y="141" width="60" height="22" rx="11" fill="#0d2a26" stroke="#1d5a4d"/>
+  <circle cx="1138" cy="152" r="3.5" fill="#45e0c1"/>
+  <text x="1146" y="156" font-family="Noto Sans, Liberation Sans, sans-serif" font-size="10" font-weight="700" letter-spacing="0.8" fill="#76d9c4">LIVE</text>
+
+  <g font-family="Noto Sans Mono, Liberation Mono, monospace" font-size="14.2" font-weight="400">
+    <text x="772" y="212" fill="#45e0c1">$</text>
+    <text x="792" y="212" fill="#e8eefb">docker run -d --name rabta \</text>
+    <text x="792" y="240" fill="#e8eefb">  -p 3232:3232 -v rabta:/data \</text>
+    <text x="792" y="268" fill="#e8eefb">  ghcr.io/besoeasy/rabta:latest</text>
+
+    <text x="772" y="318" fill="#45e0c1">$</text>
+    <text x="792" y="318" fill="#e8eefb">curl -s localhost:3232/healthz</text>
+    <text x="792" y="346" fill="#8fd6ff">{"status":"ok","live_events":0,</text>
+    <text x="792" y="370" fill="#8fd6ff"> "live_blobs":0}</text>
+
+    <text x="772" y="422" fill="#55d6b8"># events + blobs + SSE + peer sync</text>
+    <text x="772" y="450" fill="#64748b"># no accounts. no schema.</text>
+    <text x="772" y="478" fill="#64748b"># no external database.</text>
+  </g>
+</svg>

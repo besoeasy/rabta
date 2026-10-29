@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="780" viewBox="0 0 1200 780">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#070b14"/>
+      <stop offset="0.6" stop-color="#0a1120"/>
+      <stop offset="1" stop-color="#0d172a"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#45e0c1"/>
+      <stop offset="1" stop-color="#6c8cff"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#6c8cff" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#6c8cff" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#ffffff" stroke-opacity="0.04" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1200" height="780" fill="url(#bg)"/>
+  <rect width="1200" height="780" fill="url(#grid)"/>
+  <ellipse cx="1040" cy="90" rx="380" ry="260" fill="url(#glow)"/>
+
+  <rect x="48" y="44" width="1104" height="690" rx="20" fill="#0a1322" stroke="#22314a"/>
+  <rect x="48" y="44" width="1104" height="48" rx="20" fill="#0e192b"/>
+  <rect x="48" y="72" width="1104" height="20" fill="#0e192b"/>
+  <circle cx="76" cy="68" r="6" fill="#ff6b6b"/>
+  <circle cx="98" cy="68" r="6" fill="#f6c85f"/>
+  <circle cx="120" cy="68" r="6" fill="#45e0c1"/>
+  <text x="148" y="73" font-family="Noto Sans Mono, Liberation Mono, monospace" font-size="13" fill="#7d8da7">rabta / quick start</text>
+
+  <rect x="1034" y="56" width="94" height="24" rx="12" fill="#0d2a26" stroke="#1d5a4d"/>
+  <circle cx="1050" cy="68" r="3.5" fill="#45e0c1"/>
+  <text x="1060" y="72" font-family="Noto Sans, Liberation Sans, sans-serif" font-size="10.5" font-weight="700" letter-spacing="0.9" fill="#76d9c4">RUNNING</text>
+
+  <g font-family="Noto Sans Mono, Liberation Mono, monospace" font-size="15.5" font-weight="400">
+    <text x="84" y="138" fill="#45e0c1">$</text>
+    <text x="106" y="138" fill="#e8eefb">docker run -d --name rabta -p 3232:3232 \</text>
+    <text x="106" y="167" fill="#e8eefb">  -v rabta:/data ghcr.io/besoeasy/rabta:latest</text>
+    <text x="106" y="196" fill="#64748b">a1b2c3d4e5f6</text>
+
+    <text x="84" y="254" fill="#45e0c1">$</text>
+    <text x="106" y="254" fill="#e8eefb">curl -s http://localhost:3232/healthz</text>
+    <text x="106" y="283" fill="#8fd6ff">{"status":"ok","live_events":0,"live_blobs":0}</text>
+
+    <text x="84" y="341" fill="#45e0c1">$</text>
+    <text x="106" y="341" fill="#e8eefb">curl -X POST http://localhost:3232/events \</text>
+    <text x="106" y="370" fill="#e8eefb">  -H 'content-type: application/json' \</text>
+    <text x="106" y="399" fill="#e8eefb">  --data-binary @event.json</text>
+    <text x="106" y="428" fill="#8fd6ff">{"status":"stored","id":"7f3c9a...","blob_url":"/blobs/..."}</text>
+
+    <text x="84" y="486" fill="#45e0c1">$</text>
+    <text x="106" y="486" fill="#e8eefb">curl -N 'http://localhost:3232/events/stream?collection=chat/room-42'</text>
+    <text x="106" y="515" fill="#b9c6dc">id: 42</text>
+    <text x="106" y="544" fill="#b9c6dc">event: message</text>
+    <text x="106" y="573" fill="#8fd6ff">data: {"collection":"chat/room-42","data":{"ciphertext":"..."}}</text>
+
+    <text x="84" y="631" fill="#45e0c1">$</text>
+    <text x="106" y="631" fill="#e8eefb">curl -s http://localhost:3232/stats</text>
+    <text x="106" y="660" fill="#8fd6ff">{"events":{"live":1},"blobs":{"live":1},"sync":{"accepting":true}}</text>
+  </g>
+
+  <rect x="84" y="700" width="248" height="1" fill="url(#accent)" opacity="0.7"/>
+  <text x="84" y="722" font-family="Noto Sans, Liberation Sans, sans-serif" font-size="12.5" font-weight="600" letter-spacing="0.4" fill="#708099">ONE CONTAINER · ZERO EXTERNAL SERVICES</text>
+</svg>
