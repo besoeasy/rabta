@@ -70,7 +70,7 @@ pub fn parse_and_verify(body: &[u8], now: i64) -> ApiResult<ParsedEvent> {
     let owner_str = get_str(obj, "owner").ok_or_else(|| ApiError::bad_sig("envelope has no owner"))?;
     let Some(owner_hex_part) = owner_str.strip_prefix("ed25519:") else {
         return Err(ApiError::bad_sig(
-            "owner must be `ed25519:<64-hex pubkey>` (ed25519 is the only algorithm in v2; the prefix is the forward-extension point)",
+            "owner must be `ed25519:<64-hex pubkey>` (ed25519 is the only algorithm; the prefix is the forward-extension point)",
         ));
     };
     if !(owner_hex_part.len() == 64 && is_hex(owner_hex_part)) {

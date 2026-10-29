@@ -2,7 +2,7 @@
 name = "rabta"
 version = "0.0.1"
 edition = "2024"
-description = "rabta node v2 — events + blobs on one port, Rust"
+description = "rabta node — events + blobs on one port, Rust"
 
 [dependencies]
 axum = { version = "0.8" }

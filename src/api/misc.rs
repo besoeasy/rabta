@@ -12,7 +12,7 @@ pub async fn index(State(n): State<AppState>) -> Json<serde_json::Value> {
     let mut routes = json!({
         "service": "rabta",
         "version": env!("CARGO_PKG_VERSION"),
-        "description": "rabta node v2 — events + blobs on one port",
+        "description": "rabta node — events + blobs on one port",
         "routes": {
             "GET /": "this index",
             "GET /healthz": "liveness probe",

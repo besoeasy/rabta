@@ -1,8 +1,8 @@
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
-pub const SEED_EVENTS: &str = "rabta-events-v2";
-pub const SEED_BLOBS: &str = "rabta-blobs-v2";
+pub const SEED_EVENTS: &str = "rabta-events";
+pub const SEED_BLOBS: &str = "rabta-blobs";
 
 /// One posted filter: type + sizing + base64 cells.
 #[derive(Debug, Clone, Serialize, Deserialize)]
