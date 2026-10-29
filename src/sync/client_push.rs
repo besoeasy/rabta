@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -11,6 +12,10 @@ const TIMEOUT: Duration = Duration::from_secs(30);
 /// locked sizing). Every positive is re-offered once per rotation window,
 /// so a false positive can delay delivery but never hide an event forever.
 const POSITIVE_ROTATION: i64 = 8;
+
+/// Advances once per push pass, independent of wall-clock/backoff cadence, so
+/// every positive slot is visited even when ticks are delayed.
+static PUSH_ROTATION: AtomicU64 = AtomicU64::new(0);
 
 fn join(peer: &reqwest::Url, path: &str) -> reqwest::Url {
     peer.join(path).expect("joined url")
@@ -81,8 +86,8 @@ pub async fn push_i_hold_events(n: &AppState, peer: &reqwest::Url, reply: &Value
         Err(_) => return,
     };
     let their = Bloom { bits, cells };
-    // Time-based slot: consecutive ticks rotate which positives are re-offered.
-    let rotation = (crate::store::reaper::now() / 60).rem_euclid(POSITIVE_ROTATION);
+    // Each pass visits the next slot; consecutive passes cover every positive.
+    let rotation = (PUSH_ROTATION.fetch_add(1, Ordering::Relaxed) % POSITIVE_ROTATION as u64) as i64;
 
     let mut last_seq = 0i64;
     loop {
