@@ -1,6 +1,6 @@
 [package]
 name = "rabta"
-version = "0.0.1"
+version = "0.0.1-dev"
 edition = "2024"
 description = "rabta node — events + blobs on one port, Rust"
 
