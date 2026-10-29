@@ -18,6 +18,10 @@ Rabta is the backend you run when you want to **ship the product, not the infras
 
 Clients encrypt and sign. Rabta verifies signatures, stores opaque envelopes, and never needs to understand your data.
 
+> **API reference:** [**api.md**](api.md) — every route, the cryptography, wire formats, blob lifecycle, and sync protocol v1.
+>
+> **Jump to:** [publish an event](api.md#post-events) · [stream over SSE](api.md#get-eventsstream) · [attach a blob](api.md#put-blobsnameblobbin) · [replicate](api.md#sync-protocol-v1)
+
 ## Why Rabta?
 
 - **Zero-knowledge by design** — payloads are encrypted and signed by clients; the node only sees ciphertext and metadata.
@@ -60,7 +64,7 @@ curl -s http://localhost:3232/healthz
   <img src="assets/terminal-demo.png" alt="Rabta quick start: run the Docker container, publish a signed event, stream over SSE, and check stats" width="100%">
 </p>
 
-That's it. Your backend is live at `http://localhost:3232`. The root route returns a machine-readable index of every endpoint.
+That's it. Your backend is live at `http://localhost:3232`.
 
 Images are published for **linux/amd64** and **linux/arm64**. Tags: `latest`, `X.X.X`, and `dev`.
 
@@ -83,73 +87,32 @@ flowchart LR
 
 The server never parses your application data, never runs your schema, and never needs a plaintext copy.
 
-## API
+## Developer docs
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/` | Route index |
-| `GET` | `/healthz` | Liveness probe |
-| `GET` | `/stats` | Storage, eviction, SSE, and sync counters |
-| `POST` | `/events` | Publish a signed envelope |
-| `GET` | `/events` | List by `collection`, `label`, `owner`, `limit`, `cursor` |
-| `GET` | `/events/{id}` | Fetch one event (`ETag` / `If-None-Match`) |
-| `GET` | `/events/{id}/size` | Envelope and attachment sizes |
-| `GET` | `/events/stream` | SSE stream with `Last-Event-ID` resume |
-| `PUT` | `/blobs/{name}.blob\|bin` | Upload raw bytes |
-| `GET` | `/blobs/{hash}` | Fetch a blob (`Range` / `ETag`) |
-| `HEAD` | `/blobs/{hash}` | Probe a blob |
+Everything developers need lives in [**api.md**](api.md):
 
-Sync-plane routes are unauthenticated by design. Keep them on a private network or behind a proxy.
+- [Event envelope, canonical JSON, and Ed25519 signing](api.md#cryptography-and-the-event-envelope)
+- [All public routes and exact response shapes](api.md#public-routes)
+- [Blob upload, range reads, and the orphan lifecycle](api.md#blob-lifecycle)
+- [Sync protocol v1 wire format and reconciliation algorithm](api.md#sync-protocol-v1)
+- [Limits, environment variables, and copy-paste examples](api.md#limits-and-runtime-configuration)
 
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `POST` | `/sync/reconcile` | Exact range reconciliation (protocol v1) |
-| `POST` | `/sync/events` | Push an event batch |
-| `POST` | `/sync/events/fetch` | Fetch event envelopes by ID |
-| `GET` | `/sync/events` | Paged event pull |
-| `GET` | `/sync/events/{id}` | Pull one event envelope |
-| `POST` | `/sync/blobs` | Push one blob body |
-| `GET` | `/sync/blobs/{hash}` | Pull one blob body |
-
-## Publish an event
-
-```json
-{
-  "collection": "chat/room-42",
-  "created_at": 1760000000,
-  "expires_at": 1760086400,
-  "owner": "ed25519:<64 hex public key>",
-  "labels": ["team"],
-  "data": { "ciphertext": "..." },
-  "id": "<sha256 of the canonical fields>",
-  "sig": "<ed25519 signature>"
-}
-```
-
-`id` is the SHA-256 of the canonical JSON of `{collection, created_at, data, expires_at, labels, owner}` plus `blob` when present — sorted keys, compact separators. `sig` is the Ed25519 signature over that 32-byte digest.
+The short version:
 
 ```bash
+# Publish a signed envelope.
 curl -X POST http://localhost:3232/events \
   -H 'content-type: application/json' \
   --data-binary @event.json
-```
 
-## Attach a file
-
-```bash
+# Upload bytes, then reference the returned hash from an event.
 curl -X PUT --data-binary @file.bin http://localhost:3232/blobs/file.bin
-# {"hash":"<sha256>","size":123,"url":"/blobs/<sha256>"}
-```
 
-Add the returned hash as `"blob"` in an event. Upload before or after; the hash is the join point.
-
-## Stream live
-
-```bash
+# Stream live events.
 curl -N 'http://localhost:3232/events/stream?collection=chat/room-42'
 ```
 
-Reconnect with `Last-Event-ID` to resume from the last event you processed. The stream is backed by a shared in-process feed, so one subscriber burst does not multiply database reads.
+The root route returns a machine-readable index of the public endpoints, plus the sync routes when peers are configured.
 
 ## Replicate
 
@@ -164,39 +127,21 @@ docker run -d \
 
 New events push to peers immediately. Every 60 seconds each node reconciles exact sorted-key ranges: matching ranges are skipped by count plus fingerprint, small ranges exchange IDs directly, and larger mismatches split by nibble. Event bodies move in both directions; blob bodies are pull-only and are also healed on read.
 
-Replication is designed for small, self-managed clusters of up to **8 peers**. It is not a consensus system: nodes converge toward the union of live data, subject to TTL and eviction.
+Replication is designed for small, self-managed clusters of up to **8 peers**. It is not a consensus system: nodes converge toward the union of live data, subject to TTL and eviction. See [Sync protocol v1](api.md#sync-protocol-v1) for the wire format.
 
-## Configuration
+## Configuration and limits
 
-Set environment variables, or put `KEY=VALUE` lines in `/data/config.env`. Process environment wins.
+Set environment variables, or put `KEY=VALUE` lines in `/data/config.env`. Process environment wins. The common knobs are `PORT`, `DATA_DIR`, `STORAGE_MAX`, `SSE_SUBSCRIBER_CAP`, and `NODES`.
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `PORT` | `3232` | HTTP port |
-| `DATA_DIR` | `/data` | SQLite database and blob storage |
-| `STORAGE_MAX` | `20GB` | Storage ceiling; clamped to 90% of free disk at boot |
-| `SSE_SUBSCRIBER_CAP` | `256` | Maximum concurrent SSE clients |
-| `NODES` | empty | Comma-separated peer URLs, max 8 |
-| `RUST_LOG` | `info` | Log filter, for example `debug` or `rabta=debug` |
+Defaults: 100 KB event envelopes, event TTLs above 60 seconds and up to 365 days, blobs capped at 10% of `STORAGE_MAX`, and orphaned blobs removed after one hour.
 
-## Guardrails
-
-- Event envelope: 100 KB max
-- Event TTL: greater than 60 seconds, up to 365 days
-- Single blob: 10% of `STORAGE_MAX`
-- Unattached blobs: deleted after 1 hour
-- Admission watermark: 90% of `STORAGE_MAX`; pressure cleanup evicts to 85%
-- Peers: 8 max, HTTP(S) only
+The full table is in [Limits and runtime configuration](api.md#limits-and-runtime-configuration).
 
 ## Privacy model
 
 Rabta is zero-knowledge in the practical sense: it has no accounts, no application logic, and never needs plaintext. It does see metadata — public key, collection, labels, sizes, and timing. Encrypt payloads client-side when that metadata matters.
 
-For a hardened deployment:
-
-- Put the node behind TLS and an authenticated reverse proxy if it is reachable from the internet.
-- Keep sync ports on a private network.
-- Treat peer URLs as trusted infrastructure, not user input.
+For a hardened deployment, put the node behind TLS and an authenticated reverse proxy if it is reachable from the internet, and keep sync ports on a private network.
 
 ## Project status
 
