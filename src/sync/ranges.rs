@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -355,6 +357,12 @@ pub fn handle(c: &rusqlite::Connection, body: &[u8], now: i64) -> Result<serde_j
     }
 
     let mut replies = Vec::with_capacity(req.ranges.len());
+    // One request may repeat a prefix (accidentally or maliciously). Computing
+    // each expensive scan once keeps a 128-range request from doing 128 full
+    // table scans. Per-probe validation still runs before a cache hit.
+    let mut summaries: HashMap<String, Reply> = HashMap::new();
+    let mut pages: HashMap<(String, Option<[u8; 32]>, usize), Reply> = HashMap::new();
+
     for p in req.ranges {
         let prefix = p.prefix.to_ascii_lowercase();
         prefix_bounds(&prefix)?;
@@ -368,14 +376,21 @@ pub fn handle(c: &rusqlite::Connection, body: &[u8], now: i64) -> Result<serde_j
                 .limit
                 .unwrap_or(MAX_IDS_PER_REPLY as u32)
                 .clamp(1, MAX_IDS_PER_REPLY as u32) as usize;
+            let key = (prefix.clone(), after, limit);
+            if let Some(reply) = pages.get(&key) {
+                replies.push(reply.clone());
+                continue;
+            }
             let (ids, next) = ids_page(c, kind, &prefix, after, limit, now)?;
-            replies.push(Reply {
+            let reply = Reply {
                 prefix,
                 count: None,
                 fp: None,
                 ids: Some(ids.iter().map(hex32).collect()),
                 next: next.map(|x| hex32(&x)),
-            });
+            };
+            pages.insert(key, reply.clone());
+            replies.push(reply);
             continue;
         }
 
@@ -394,11 +409,15 @@ pub fn handle(c: &rusqlite::Connection, body: &[u8], now: i64) -> Result<serde_j
                 }
             }
         }
+        if let Some(reply) = summaries.get(&prefix) {
+            replies.push(reply.clone());
+            continue;
+        }
         // The caller's `fp` is not trusted for storage decisions; we just
         // return our own exact summary for the same range.
         let s = summary(c, kind, &prefix, now)?;
-        replies.push(Reply {
-            prefix,
+        let reply = Reply {
+            prefix: prefix.clone(),
             count: Some(s.count),
             fp: if s.count > 0 { Some(s.fp_b64()) } else { None },
             ids: if s.count <= LEAF_KEYS as u64 {
@@ -407,7 +426,9 @@ pub fn handle(c: &rusqlite::Connection, body: &[u8], now: i64) -> Result<serde_j
                 None
             },
             next: None,
-        });
+        };
+        summaries.insert(prefix, reply.clone());
+        replies.push(reply);
     }
 
     serde_json::to_value(WireResponse {
@@ -501,6 +522,45 @@ mod tests {
 
         let blob_like = summary(&c, Kind::Blobs, "1", 1000).unwrap();
         assert_eq!(blob_like.count, 0);
+    }
+
+    #[test]
+    fn handle_dedupes_repeated_ranges_but_validates_each() {
+        let c = memdb();
+        let mut id = [0u8; 32];
+        id[0] = 0x7a;
+        insert_event(&c, id, 1);
+        let mut outside = [0u8; 32];
+        outside[0] = 0x8a;
+
+        let body = serde_json::json!({
+            "v": PROTOCOL_V,
+            "kind": "events",
+            "ranges": [
+                {"prefix": "7", "count": 1, "ids": [hex32(&id)]},
+                {"prefix": "7", "count": 0},
+                {"prefix": "7", "ids_only": true, "limit": 10},
+                {"prefix": "7", "ids_only": true, "limit": 10}
+            ]
+        });
+        let out = handle(&c, &serde_json::to_vec(&body).unwrap(), 1000).unwrap();
+        let ranges = out["ranges"].as_array().unwrap();
+        assert_eq!(ranges.len(), 4);
+        assert_eq!(ranges[0]["count"], 1);
+        assert_eq!(ranges[1]["count"], 1);
+        assert_eq!(ranges[0]["fp"], ranges[1]["fp"]);
+        assert_eq!(ranges[2], ranges[3]);
+
+        // A cached summary must not bypass validation of this probe's ids.
+        let bad = serde_json::json!({
+            "v": PROTOCOL_V,
+            "kind": "events",
+            "ranges": [
+                {"prefix": "7", "count": 1, "ids": [hex32(&id)]},
+                {"prefix": "7", "count": 1, "ids": [hex32(&outside)]}
+            ]
+        });
+        assert!(handle(&c, &serde_json::to_vec(&bad).unwrap(), 1000).is_err());
     }
 
     #[test]
