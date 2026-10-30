@@ -183,7 +183,15 @@ async fn transfer_blob(n: &AppState, peer: &reqwest::Url, hash_hex: &str) -> boo
     }
 
     let (ev, bl) = n.db.read(|c: &rusqlite::Connection| crate::db::live_bytes(c)).await;
-    let mut sink = match BlobSink::start(&n.cfg.data_dir, ev + bl, n.cfg.storage_max, n.cfg.max_single_blob) {
+    let mut sink = match BlobSink::start(
+        &n.uploads,
+        &n.cfg.data_dir,
+        ev + bl,
+        n.cfg.storage_max,
+        n.cfg.max_single_blob,
+    )
+    .await
+    {
         Ok(s) => s,
         Err(_) => return false,
     };

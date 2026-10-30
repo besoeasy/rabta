@@ -300,6 +300,13 @@ pub async fn reaper_tick(db: &Db, cfg: Config) {
             crate::db::reconcile_counters(conn);
             sweep_once(conn, &cfg);
             evict_pass(conn, &cfg, 0);
+            let removed = crate::store::blobs::cleanup_tmp(
+                &cfg.data_dir,
+                crate::store::blobs::TMP_FILE_TTL,
+            );
+            if removed > 0 {
+                tracing::info!(removed, "removed stale upload temp files");
+            }
             0
         })
         .await;

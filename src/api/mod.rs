@@ -18,6 +18,8 @@ pub struct Node {
     pub db: Db,
     pub http: reqwest::Client,
     pub started_at: i64,
+    /// Process-wide upload admission (slots, temp bytes, free-space floor).
+    pub uploads: std::sync::Arc<crate::store::blobs::UploadGovernor>,
 }
 
 pub type AppState = std::sync::Arc<Node>;

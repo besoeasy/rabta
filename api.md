@@ -78,6 +78,9 @@ The HTTP status and `code` identify the class of failure:
 | `bad_extension` | 400 | Public blob upload filename is not `*.blob` or `*.bin`. |
 | `bad_blob` | 400 | Envelope `blob` is not exactly one 64-hex SHA-256. |
 | `at_watermark` | 503 | Storage is at the admission watermark; upload refused. |
+| `busy` | 503 | Too many concurrent uploads or the temp-file budget is exhausted; retry shortly. |
+| `disk_full` | 507 | Free disk space is below the safety floor; upload refused. |
+| `timeout` | 408 | Upload body stalled between chunks; upload aborted. |
 | `subscriber_cap` | 503 | SSE subscriber limit reached. |
 | `not_found` | 404 | Unknown, expired, or malformed resource ID. |
 | `internal` | 500 | Storage or filesystem failure. |
@@ -524,6 +527,8 @@ curl -X PUT --data-binary @file.bin \
 - Empty uploads return `400 bad_json`.
 - Maximum body size is **10% of effective `STORAGE_MAX`** (default 20 GB → 2 GB).
 - Uploads are refused with `503 at_watermark` when admitting them would cross the watermark.
+- At most **8 uploads** run concurrently per process. In-flight temp bytes are reserved against half the watermark and against the free-space safety floor (5% of `STORAGE_MAX`, minimum 16 MiB). Exhaustion returns `503 busy` or `507 disk_full`.
+- An upload that stalls for **30 seconds** between chunks is aborted with `408 timeout`; its temp file is removed.
 - The SHA-256 is computed while streaming; nothing is committed until the body is complete.
 
 **Response**

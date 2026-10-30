@@ -201,12 +201,18 @@ pub fn parse_size(s: &str) -> Result<u64, String> {
     Ok(scaled as u64)
 }
 
-/// 90% of the device holding `dir`. Public wrapper reused by /stats.
+/// Available bytes on the device holding `dir`, or `None` when it cannot be
+/// determined. Reused by the upload governor's free-space floor.
+pub fn free_bytes_opt(dir: &std::path::Path) -> Option<u64> {
+    free_bytes(dir)
+}
+
+/// Available bytes on the device holding `dir`. Public wrapper reused by /stats.
 pub fn free_bytes_public(dir: &std::path::Path) -> u64 {
     free_bytes(dir).unwrap_or(0)
 }
 
-/// 90% of the device holding `dir`. Computed once at boot, never re-evaluated.
+/// Available bytes on the device holding `dir`. Computed on demand.
 fn free_bytes(dir: &std::path::Path) -> Option<u64> {
     // Make sure the path exists (data dir is created before config load in main).
     std::fs::create_dir_all(dir).ok()?;

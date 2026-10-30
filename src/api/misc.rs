@@ -103,6 +103,10 @@ pub async fn stats(State(n): State<AppState>) -> impl IntoResponse {
             "blobs_evicted": idx.blobs_evicted.load(std::sync::atomic::Ordering::Relaxed),
             "bytes_reclaimed": idx.bytes_reclaimed.load(std::sync::atomic::Ordering::Relaxed),
         },
+        "uploads": {
+            "inflight_bytes": n.uploads.inflight_bytes(),
+            "temp_ttl_s": crate::store::blobs::TMP_FILE_TTL.as_secs(),
+        },
         "sse": {
             "subscribers": super::SSE_ACTIVE.load(std::sync::atomic::Ordering::Relaxed),
             "cap": cfg.sse_subscriber_cap,

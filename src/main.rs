@@ -48,11 +48,13 @@ async fn main() {
     // Apply expiry + watermark immediately instead of waiting one interval.
     store::reaper::reaper_tick(&database, cfg.clone()).await;
 
+    let uploads = store::blobs::UploadGovernor::from_config(&cfg);
     let state: AppState = std::sync::Arc::new(api::Node {
         cfg: cfg.clone(),
         db: database.clone(),
         http: reqwest::Client::new(),
         started_at: store::reaper::now(),
+        uploads,
     });
 
     let app = router(state.clone());

@@ -1,10 +1,13 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 
 use crate::db::Db;
-use crate::error::{ApiError, ApiResult};
+use crate::error::ApiError;
 
 /// Blob file layout: `/data/blobs/ab/<64-hex>` — one file per blob,
 /// 2-hex bucket dirs, bytes verified once at store time (decision #11).
@@ -30,7 +33,128 @@ pub fn init_dirs(data_dir: &Path) -> std::io::Result<()> {
 pub enum Abort {
     TooLarge,
     Watermark,
+    /// Upload slots or the temp-file budget are exhausted; retry shortly.
+    Busy,
+    /// Free disk space is below the configured safety floor.
+    DiskFull,
     Io(String),
+}
+
+impl From<Abort> for ApiError {
+    fn from(a: Abort) -> Self {
+        match a {
+            Abort::TooLarge => ApiError::too_large("single blob exceeds 10% of STORAGE_MAX"),
+            Abort::Watermark => ApiError::at_watermark(),
+            Abort::Busy => ApiError::busy(),
+            Abort::DiskFull => ApiError::disk_full(),
+            Abort::Io(m) => ApiError::internal(m),
+        }
+    }
+}
+
+/// How long an upload waits for a slot before the relay says "busy".
+const UPLOAD_SLOT_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long an upload may stall between body chunks before it is aborted.
+pub const UPLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Concurrent blob uploads allowed per process.
+const MAX_CONCURRENT_UPLOADS: usize = 8;
+/// Stale temp files older than this are removed by the reaper.
+pub const TMP_FILE_TTL: Duration = Duration::from_secs(24 * 3600);
+
+/// Process-wide upload admission. Slots bound concurrent streams; the byte
+/// reservation bounds temp files so parallel uploads cannot each pass the
+/// per-request watermark check and fill the disk together.
+#[derive(Debug)]
+pub struct UploadGovernor {
+    slots: Arc<tokio::sync::Semaphore>,
+    inflight: AtomicI64,
+    tmp_budget: i64,
+    free_floor: u64,
+}
+
+impl UploadGovernor {
+    pub fn from_config(cfg: &crate::config::Config) -> Arc<Self> {
+        // Temp files may use at most half of the admission watermark, so a
+        // burst of uploads cannot consume the space reserved for committed
+        // data. The floor keeps at least a small amount of disk free for the
+        // DB/WAL and the operator.
+        let tmp_budget = (cfg.watermark_bytes / 2)
+            .max(16 * 1024 * 1024)
+            .min(cfg.watermark_bytes.max(1));
+        let free_floor = (cfg.storage_max / 20)
+            .max(16 * 1024 * 1024)
+            .min((cfg.storage_max / 2).max(1));
+        Arc::new(UploadGovernor {
+            slots: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_UPLOADS)),
+            inflight: AtomicI64::new(0),
+            tmp_budget: tmp_budget.min(i64::MAX as u64) as i64,
+            free_floor,
+        })
+    }
+
+    pub fn inflight_bytes(&self) -> i64 {
+        self.inflight.load(Ordering::Relaxed)
+    }
+
+    async fn acquire(self: &Arc<Self>) -> Result<UploadPermit, Abort> {
+        let slot = tokio::time::timeout(
+            UPLOAD_SLOT_TIMEOUT,
+            Arc::clone(&self.slots).acquire_owned(),
+        )
+        .await
+        .map_err(|_| Abort::Busy)?
+        .map_err(|_| Abort::Busy)?;
+        Ok(UploadPermit {
+            governor: Arc::clone(self),
+            reserved: 0,
+            _slot: slot,
+        })
+    }
+}
+
+/// RAII reservation for one upload stream. Dropping it releases the slot and
+/// all bytes reserved by the stream, including a staged file not yet installed.
+#[derive(Debug)]
+pub struct UploadPermit {
+    governor: Arc<UploadGovernor>,
+    reserved: i64,
+    _slot: tokio::sync::OwnedSemaphorePermit,
+}
+
+impl UploadPermit {
+    /// Reserve `n` bytes against both the global temp budget and the
+    /// admission watermark. Released automatically when the permit drops.
+    fn try_reserve(&mut self, n: u64, live_start: i64, watermark: u64) -> Result<(), Abort> {
+        let n = i64::try_from(n).map_err(|_| Abort::TooLarge)?;
+        let watermark = i64::try_from(watermark).unwrap_or(i64::MAX);
+        loop {
+            let current = self.governor.inflight.load(Ordering::Acquire);
+            let next = current.saturating_add(n);
+            if next > self.governor.tmp_budget {
+                return Err(Abort::Busy);
+            }
+            if live_start.max(0).saturating_add(next) > watermark {
+                return Err(Abort::Watermark);
+            }
+            if self
+                .governor
+                .inflight
+                .compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                self.reserved = self.reserved.saturating_add(n);
+                return Ok(());
+            }
+        }
+    }
+}
+
+impl Drop for UploadPermit {
+    fn drop(&mut self) {
+        if self.reserved != 0 {
+            self.governor.inflight.fetch_sub(self.reserved, Ordering::AcqRel);
+        }
+    }
 }
 
 /// Where a blob body came from. Peer bodies must never evict local events to
@@ -68,6 +192,7 @@ impl UnlinkQueue {
 
 /// The destination every blob write streams through (both doors): temp file +
 /// incremental sha256 in one pass, caps enforced *during* the stream.
+#[derive(Debug)]
 pub struct BlobSink {
     file: Option<std::fs::File>,
     hasher: Sha256,
@@ -76,6 +201,10 @@ pub struct BlobSink {
     watermark: u64,
     max_single: u64,
     path: PathBuf,
+    permit: Option<UploadPermit>,
+    /// Set by `finish`/`discard` so Drop does not remove a file that was
+    /// deliberately handed off or already removed.
+    done: bool,
 }
 
 #[derive(Debug)]
@@ -84,6 +213,10 @@ pub struct Staged {
     pub hash: [u8; 32],
     pub size: u64,
     pub path: PathBuf, // still temp; caller materializes after commit
+    /// Keeps the upload's byte reservation alive until install/refusal, so
+    /// concurrent uploads see the staged file in the in-flight total.
+    #[allow(dead_code)] // held for its Drop side effect
+    permit: Option<UploadPermit>,
 }
 
 impl Staged {
@@ -103,7 +236,23 @@ impl Drop for Staged {
 }
 
 impl BlobSink {
-    pub fn start(data_dir: &Path, live_bytes_start: i64, watermark: u64, max_single: u64) -> ApiResult<BlobSink> {
+    /// Start one upload stream. Admission is process-wide: a slot bounds
+    /// concurrency, and the byte reservation bounds temp files against both
+    /// the global temp budget and the storage watermark.
+    pub async fn start(
+        gov: &Arc<UploadGovernor>,
+        data_dir: &Path,
+        live_bytes_start: i64,
+        watermark: u64,
+        max_single: u64,
+    ) -> Result<BlobSink, Abort> {
+        if matches!(
+            crate::config::free_bytes_opt(data_dir),
+            Some(free) if free < gov.free_floor
+        ) {
+            return Err(Abort::DiskFull);
+        }
+        let permit = gov.acquire().await?;
         let path = tmp_dir(data_dir).join(format!(
             "p{}-{}-{}",
             std::process::id(),
@@ -117,7 +266,7 @@ impl BlobSink {
                 .subsec_nanos()
         ));
         let file = std::fs::File::create(&path)
-            .map_err(|e| ApiError::internal(format!("cannot create temp file: {e}")))?;
+            .map_err(|e| Abort::Io(format!("cannot create temp file: {e}")))?;
         Ok(BlobSink {
             file: Some(file),
             hasher: Sha256::new(),
@@ -126,6 +275,8 @@ impl BlobSink {
             watermark,
             max_single,
             path,
+            permit: Some(permit),
+            done: false,
         })
     }
 
@@ -136,10 +287,13 @@ impl BlobSink {
         if self.written > self.max_single {
             return Err(Abort::TooLarge);
         }
-        if self.live_bytes_start + self.written as i64 > self.watermark as i64 {
-            return Err(Abort::Watermark);
-        }
-        let Some(f) = self.file.as_mut() else { return Err(Abort::Io("sink already closed".into())) };
+        self.permit
+            .as_mut()
+            .expect("sink permit already released")
+            .try_reserve(chunk.len() as u64, self.live_bytes_start, self.watermark)?;
+        let Some(f) = self.file.as_mut() else {
+            return Err(Abort::Io("sink already closed".into()));
+        };
         self.hasher.update(chunk);
         if let Err(e) = f.write_all(chunk) {
             return Err(Abort::Io(e.to_string()));
@@ -147,18 +301,27 @@ impl BlobSink {
         Ok(())
     }
 
-    pub fn finish(self) -> Result<Staged, Abort> {
-        let mut me = self;
-        if let Err(e) = me.take_file().sync_all() {
-            let _ = std::fs::remove_file(&me.path);
+    pub fn finish(mut self) -> Result<Staged, Abort> {
+        if let Err(e) = self.take_file().sync_all() {
+            self.done = true;
+            let _ = std::fs::remove_file(&self.path);
             return Err(Abort::Io(e.to_string()));
         }
-        let hash: [u8; 32] = me.hasher.finalize().into();
-        Ok(Staged { hash_hex: hex::encode(hash), hash, size: me.written, path: me.path })
+        let hash: [u8; 32] = self.hasher.clone().finalize().into();
+        let path = self.path.clone();
+        self.done = true;
+        Ok(Staged {
+            hash_hex: hex::encode(hash),
+            hash,
+            size: self.written,
+            path,
+            permit: self.permit.take(),
+        })
     }
 
     pub fn discard(mut self) {
-        self.take_file();
+        self.done = true;
+        drop(self.file.take());
         let _ = std::fs::remove_file(&self.path);
     }
 
@@ -169,7 +332,17 @@ impl BlobSink {
     pub fn written(&self) -> u64 {
         self.written
     }
+}
 
+impl Drop for BlobSink {
+    fn drop(&mut self) {
+        if self.done {
+            return;
+        }
+        self.done = true;
+        drop(self.file.take());
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 /// Move a staged temp file into its content-addressed slot.
@@ -427,6 +600,30 @@ pub struct BlobPassReport {
     victims: Vec<([u8; 32], i64)>,
 }
 
+/// Remove stale temp files left behind by cancelled uploads or crashes.
+/// Boot hygiene clears the directory unconditionally; this periodic pass
+/// only touches files older than `max_age` so active slow uploads survive.
+pub fn cleanup_tmp(data_dir: &Path, max_age: Duration) -> usize {
+    let now = std::time::SystemTime::now();
+    let Ok(entries) = std::fs::read_dir(tmp_dir(data_dir)) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        let Ok(modified) = meta.modified() else { continue };
+        if now.duration_since(modified).unwrap_or_default() > max_age
+            && std::fs::remove_file(entry.path()).is_ok()
+        {
+            removed += 1;
+        }
+    }
+    removed
+}
+
 /// Full data-dir open + boot hygiene: remove leftover temp files, remove
 /// files with no row (crash leftovers, collected at boot only — no dir
 /// scans in steady state, the DB stays the source of truth).
@@ -521,6 +718,7 @@ mod tests {
             hash,
             size: body.len() as u64,
             path,
+            permit: None,
         }
     }
 
@@ -603,6 +801,7 @@ mod tests {
             hash: [7u8; 32],
             size: 10,
             path: path.clone(),
+            permit: None,
         };
 
         let outcome = install_staged(&db, &cfg, staged, BlobOrigin::Local).await.unwrap();
@@ -676,6 +875,129 @@ mod tests {
         assert_eq!(std::fs::read(&dest).unwrap(), b"abcd", "dedupe did not heal the file");
 
         drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn test_governor(tmp_budget: i64, free_floor: u64) -> Arc<UploadGovernor> {
+        Arc::new(UploadGovernor {
+            slots: Arc::new(tokio::sync::Semaphore::new(8)),
+            inflight: AtomicI64::new(0),
+            tmp_budget,
+            free_floor,
+        })
+    }
+
+    fn tmp_files(dir: &std::path::Path) -> usize {
+        std::fs::read_dir(tmp_dir(dir))
+            .map(|entries| entries.flatten().filter(|e| e.path().is_file()).count())
+            .unwrap_or(0)
+    }
+
+    #[tokio::test]
+    async fn concurrent_uploads_share_one_watermark() {
+        let dir = temp_dir("blob-shared-watermark");
+        init_dirs(&dir).unwrap();
+        let gov = test_governor(1_000, 0);
+
+        let mut first = BlobSink::start(&gov, &dir, 0, 90, 100).await.unwrap();
+        first.push(&[1u8; 50]).unwrap();
+
+        // A second stream with the same live-byte snapshot must not assume the
+        // whole watermark is available to it.
+        let mut second = BlobSink::start(&gov, &dir, 0, 90, 100).await.unwrap();
+        assert!(matches!(second.push(&[2u8; 50]), Err(Abort::Watermark)));
+
+        drop(first);
+        drop(second);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn temp_budget_bounds_parallel_upload_bytes() {
+        let dir = temp_dir("blob-temp-budget");
+        init_dirs(&dir).unwrap();
+        let gov = test_governor(45, 0);
+
+        let mut first = BlobSink::start(&gov, &dir, 0, 1_000, 100).await.unwrap();
+        first.push(&[1u8; 40]).unwrap();
+
+        let mut second = BlobSink::start(&gov, &dir, 0, 1_000, 100).await.unwrap();
+        assert!(matches!(second.push(&[2u8; 10]), Err(Abort::Busy)));
+        assert_eq!(gov.inflight_bytes(), 40);
+
+        drop(first);
+        drop(second);
+        assert_eq!(gov.inflight_bytes(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn dropped_sink_removes_temp_file_and_releases_bytes() {
+        let dir = temp_dir("blob-sink-drop");
+        init_dirs(&dir).unwrap();
+        let gov = test_governor(1_000, 0);
+
+        let mut sink = BlobSink::start(&gov, &dir, 0, 1_000, 100).await.unwrap();
+        sink.push(&[1u8; 10]).unwrap();
+        assert_eq!(gov.inflight_bytes(), 10);
+        assert_eq!(tmp_files(&dir), 1);
+
+        drop(sink);
+        assert_eq!(gov.inflight_bytes(), 0);
+        assert_eq!(tmp_files(&dir), 0, "cancelled upload leaked its temp file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn staged_keeps_reservation_until_install_or_drop() {
+        let dir = temp_dir("blob-staged-reservation");
+        init_dirs(&dir).unwrap();
+        let gov = test_governor(1_000, 0);
+
+        let mut sink = BlobSink::start(&gov, &dir, 0, 1_000, 100).await.unwrap();
+        sink.push(&[1u8; 10]).unwrap();
+        let staged = sink.finish().unwrap();
+        assert_eq!(gov.inflight_bytes(), 10, "staged file lost its reservation");
+
+        drop(staged);
+        assert_eq!(gov.inflight_bytes(), 0);
+        assert_eq!(tmp_files(&dir), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn free_space_floor_refuses_uploads() {
+        let dir = temp_dir("blob-free-floor");
+        init_dirs(&dir).unwrap();
+        let gov = test_governor(1_000, u64::MAX);
+
+        let err = BlobSink::start(&gov, &dir, 0, 1_000, 100).await.unwrap_err();
+        assert!(matches!(err, Abort::DiskFull));
+        assert_eq!(tmp_files(&dir), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cleanup_tmp_removes_only_stale_files() {
+        let dir = temp_dir("blob-tmp-cleanup");
+        init_dirs(&dir).unwrap();
+        let old = tmp_dir(&dir).join("old");
+        std::fs::write(&old, b"x").unwrap();
+        let old_time = std::time::SystemTime::now() - Duration::from_secs(2 * 3600);
+        std::fs::File::options()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(old_time))
+            .unwrap();
+
+        let fresh = tmp_dir(&dir).join("fresh");
+        std::fs::write(&fresh, b"x").unwrap();
+
+        assert_eq!(cleanup_tmp(&dir, Duration::from_secs(3600)), 1);
+        assert!(!old.exists());
+        assert!(fresh.exists());
+        assert_eq!(cleanup_tmp(&dir, Duration::from_secs(3600)), 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

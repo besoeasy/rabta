@@ -743,11 +743,13 @@ mod tests {
             sync_nodes: Vec::new(),
             sync_interval: Duration::from_secs(60),
         };
+        let uploads = crate::store::blobs::UploadGovernor::from_config(&cfg);
         std::sync::Arc::new(crate::api::Node {
             cfg,
             db: crate::db::Db::open(dir),
             http: reqwest::Client::new(),
             started_at: reaper::now(),
+            uploads,
         })
     }
 

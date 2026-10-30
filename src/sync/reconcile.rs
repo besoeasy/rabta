@@ -1112,11 +1112,13 @@ mod tests {
     }
 
     fn state(dir: &std::path::Path, cfg: crate::config::Config) -> AppState {
+        let uploads = crate::store::blobs::UploadGovernor::from_config(&cfg);
         std::sync::Arc::new(crate::api::Node {
             cfg,
             db: crate::db::Db::open(dir),
             http: reqwest::Client::new(),
             started_at: reaper::now(),
+            uploads,
         })
     }
 
@@ -1191,11 +1193,13 @@ mod tests {
         let hash: [u8; 32] = Sha256::digest(body).into();
         let hash_hex = hex::encode(hash);
         let mut sink = crate::store::blobs::BlobSink::start(
+            &a.uploads,
             &dir_a,
             0,
             cfg_a.watermark_bytes,
             cfg_a.max_single_blob,
         )
+        .await
         .unwrap();
         sink.push(body).unwrap();
         let staged = sink.finish().unwrap();
@@ -1309,11 +1313,13 @@ mod tests {
         let mut cfg_b = test_cfg(&dir_b);
         cfg_b.watermark_bytes = 0;
         cfg_b.eviction_target_bytes = 0;
+        let uploads_b = crate::store::blobs::UploadGovernor::from_config(&cfg_b);
         let b_full = std::sync::Arc::new(crate::api::Node {
             cfg: cfg_b,
             db: b.db.clone(),
             http: reqwest::Client::new(),
             started_at: reaper::now(),
+            uploads: uploads_b,
         });
         let b_url = serve(b_full.clone()).await;
 

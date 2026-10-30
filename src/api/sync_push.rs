@@ -46,24 +46,37 @@ async fn post_blobs_inner(n: AppState, req: Request<Body>) -> ApiResult<Response
 /// Stream a raw body through the sink.
 async fn stream_body(n: &AppState, req: Request<Body>) -> ApiResult<Staged> {
     let (live_events, live_blobs) = n.db.read(|c: &rusqlite::Connection| crate::db::live_bytes(c)).await;
-    let mut sink = BlobSink::start(&n.cfg.data_dir, live_events + live_blobs, n.cfg.storage_max, n.cfg.max_single_blob)?;
+    let mut sink = BlobSink::start(
+        &n.uploads,
+        &n.cfg.data_dir,
+        live_events + live_blobs,
+        n.cfg.storage_max,
+        n.cfg.max_single_blob,
+    )
+    .await?;
     let mut stream = req.into_body().into_data_stream();
     use futures_util::StreamExt;
-    while let Some(chunk) = stream.next().await {
-        let chunk = match chunk {
-            Ok(chunk) => chunk,
+    loop {
+        let next = tokio::time::timeout(
+            crate::store::blobs::UPLOAD_IDLE_TIMEOUT,
+            stream.next(),
+        )
+        .await;
+        let chunk = match next {
             Err(_) => {
+                sink.discard();
+                return Err(ApiError::timeout());
+            }
+            Ok(Some(Ok(chunk))) => chunk,
+            Ok(Some(Err(_))) => {
                 sink.discard();
                 return Err(ApiError::bad_json("body stream error"));
             }
+            Ok(None) => break,
         };
         if let Err(a) = sink.push(&chunk) {
             sink.discard();
-            return Err(match a {
-                Abort::TooLarge => ApiError::too_large("single blob exceeds 10% of STORAGE_MAX"),
-                Abort::Watermark => ApiError::at_watermark(),
-                Abort::Io(m) => ApiError::internal(m),
-            });
+            return Err(a.into());
         }
     }
     sink.finish().map_err(|a| ApiError::internal(match a {

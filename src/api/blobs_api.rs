@@ -40,30 +40,37 @@ async fn put_inner(n: AppState, name: String, req: Request<Body>) -> ApiResult<R
 
     let (live_events, live_blobs) = n.db.read(|c: &Connection| crate::db::live_bytes(c)).await;
     let mut sink = BlobSink::start(
+        &n.uploads,
         &n.cfg.data_dir,
         live_events + live_blobs,
         n.cfg.storage_max,
         n.cfg.max_single_blob,
-    )?;
+    )
+    .await?;
 
     let mut stream = req.into_body().into_data_stream();
     loop {
-        match futures_util::StreamExt::next(&mut stream).await {
-            Some(Ok(chunk)) => {
+        let next = tokio::time::timeout(
+            crate::store::blobs::UPLOAD_IDLE_TIMEOUT,
+            futures_util::StreamExt::next(&mut stream),
+        )
+        .await;
+        match next {
+            Err(_) => {
+                sink.discard();
+                return Err(ApiError::timeout());
+            }
+            Ok(Some(Ok(chunk))) => {
                 if let Err(a) = sink.push(&chunk) {
                     sink.discard();
-                    return match a {
-                        Abort::TooLarge => Err(ApiError::too_large("single blob exceeds 10% of STORAGE_MAX")),
-                        Abort::Watermark => Err(ApiError::at_watermark()),
-                        Abort::Io(m) => Err(ApiError::internal(m)),
-                    };
+                    return Err(a.into());
                 }
             }
-            Some(Err(_)) => {
+            Ok(Some(Err(_))) => {
                 sink.discard();
                 return Err(ApiError::bad_json("body stream error"));
             }
-            None => break,
+            Ok(None) => break,
         }
     }
     if sink.written() == 0 {

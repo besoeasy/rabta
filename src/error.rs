@@ -52,6 +52,27 @@ impl ApiError {
     pub fn at_watermark() -> ApiError {
         ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "at_watermark", "storage at watermark — upload aborted")
     }
+    pub fn busy() -> ApiError {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "busy",
+            "too many concurrent uploads or temp storage is full — retry shortly",
+        )
+    }
+    pub fn disk_full() -> ApiError {
+        ApiError::new(
+            StatusCode::INSUFFICIENT_STORAGE,
+            "disk_full",
+            "free disk space is below the safety floor — upload aborted",
+        )
+    }
+    pub fn timeout() -> ApiError {
+        ApiError::new(
+            StatusCode::REQUEST_TIMEOUT,
+            "timeout",
+            "request body stalled — upload aborted",
+        )
+    }
     pub fn subscriber_cap() -> ApiError {
         ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "subscriber_cap", "SSE subscriber cap reached")
     }
