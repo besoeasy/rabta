@@ -33,6 +33,39 @@ pub enum Abort {
     Io(String),
 }
 
+/// Where a blob body came from. Peer bodies must never evict local events to
+/// make room: the sync plane is pull-only and best-effort, while event loss is
+/// permanent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlobOrigin {
+    Local,
+    Peer,
+}
+
+/// File removals deferred until the surrounding DB transaction commits.
+/// Eviction can run inside an admission transaction; unlinking immediately
+/// would leave rows without bytes if that transaction rolls back.
+#[derive(Debug, Default)]
+pub struct UnlinkQueue {
+    paths: Vec<PathBuf>,
+}
+
+impl UnlinkQueue {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, path: PathBuf) {
+        self.paths.push(path);
+    }
+
+    pub fn flush(&mut self) {
+        for path in self.paths.drain(..) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 /// The destination every blob write streams through (both doors): temp file +
 /// incremental sha256 in one pass, caps enforced *during* the stream.
 pub struct BlobSink {
@@ -56,6 +89,15 @@ pub struct Staged {
 impl Staged {
     /// Drop the staged temp file when the row was refused or the commit failed.
     pub fn discard(self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+impl Drop for Staged {
+    fn drop(&mut self) {
+        // After materialize the temp path no longer exists; after a DB error it
+        // still does. Either way this is the last-resort cleanup for paths that
+        // do not explicitly call discard().
         let _ = std::fs::remove_file(&self.path);
     }
 }
@@ -132,8 +174,8 @@ impl BlobSink {
 
 /// Move a staged temp file into its content-addressed slot.
 /// Returns Ok(false) when the bytes already exist (dedupe: existing wins).
-/// Called AFTER the row commit; a crash between the two leaves an orphan
-/// file the boot sweep removes.
+/// Called inside the install transaction, before commit; a crash between the
+/// move and the commit leaves an orphan file the boot sweep removes.
 pub fn materialize(data_dir: &Path, staged: &Staged) -> std::io::Result<bool> {
     let dest = blob_path(data_dir, &staged.hash_hex);
     if dest.is_file() {
@@ -188,6 +230,10 @@ pub enum Install {
 /// Install a staged temp file: transactional accept-or-refuse + file move.
 /// Used by the raw PUT door, the sync push door, and lazy fetch-on-read.
 ///
+/// Admission and any eviction it triggers run in the same transaction as the
+/// blob row, so a failed insert rolls the eviction back. Peer-origin bodies
+/// never evict local events; they are refused at the watermark instead.
+///
 /// The file is moved into its content-addressed slot *inside* the writer lock
 /// but before the row commit. A crash before the commit leaves an orphan file
 /// (removed by boot hygiene); a crash after it leaves a complete row+file pair.
@@ -197,6 +243,7 @@ pub async fn install_staged(
     db: &crate::db::Db,
     cfg: &crate::config::Config,
     staged: Staged,
+    origin: BlobOrigin,
 ) -> rusqlite::Result<Install> {
     let dir = cfg.data_dir.clone();
     let water = cfg.watermark_bytes;
@@ -204,10 +251,14 @@ pub async fn install_staged(
     let hash = staged.hash;
     let size = staged.size;
     let now = crate::store::reaper::now();
+    let allow_event_eviction = origin == BlobOrigin::Local;
 
     db.write(move |c: &rusqlite::Connection| -> rusqlite::Result<Install> {
+        let tx = c.unchecked_transaction()?;
+        let mut unlinks = UnlinkQueue::new();
+
         // A duplicate install adds no bytes: never evict for a retry.
-        let exists: i64 = c.query_row(
+        let exists: i64 = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM blobs WHERE hash = ?1)",
             [&hash],
             |r| r.get(0),
@@ -215,16 +266,25 @@ pub async fn install_staged(
         if exists == 0 {
             // Demand-aware admission: make room for this blob (or refuse)
             // before the row insert, so eviction is charged to a write
-            // that can actually be accepted.
-            if crate::store::reaper::pressure_check(c, &cfg2, size).is_err() {
+            // that can actually be accepted. Peer bodies may reclaim
+            // collectible blobs but never delete events.
+            if crate::store::reaper::pressure_check_with(
+                &tx,
+                &cfg2,
+                size,
+                allow_event_eviction,
+                &mut unlinks,
+            )
+            .is_err()
+            {
+                drop(tx); // rollback any eviction
                 staged.discard();
                 return Ok(Install::Refused);
             }
         }
-        let tx = c.unchecked_transaction()?;
         let r = insert_blob_row(&tx, &hash, size, now, water)?;
         if r == BlobInsertResult::WatermarkFull {
-            drop(tx); // rollback
+            drop(tx); // rollback any eviction
             staged.discard();
             return Ok(Install::Refused);
         }
@@ -247,6 +307,8 @@ pub async fn install_staged(
             }
             return Err(e);
         }
+        // The row is durable; now it is safe to unlink evicted files.
+        unlinks.flush();
         Ok(if r == BlobInsertResult::Inserted { Install::Fresh } else { Install::Deduped })
     })
     .await
@@ -264,7 +326,22 @@ pub fn attach_ref(c: &rusqlite::Connection, event: &[u8; 32], blob: &[u8; 32]) -
 }
 
 /// Remove one blob row + its file + refs rows. Returns freed bytes.
+/// File removal is immediate; transactional callers use `delete_blob_with`
+/// and flush the queue only after commit.
 pub fn delete_blob(c: &rusqlite::Connection, hash: &[u8; 32], data_dir: &Path) -> rusqlite::Result<i64> {
+    let mut unlinks = UnlinkQueue::new();
+    let freed = delete_blob_with(c, hash, data_dir, &mut unlinks)?;
+    unlinks.flush();
+    Ok(freed)
+}
+
+/// Transaction-safe variant: records the file path instead of unlinking it.
+pub fn delete_blob_with(
+    c: &rusqlite::Connection,
+    hash: &[u8; 32],
+    data_dir: &Path,
+    unlinks: &mut UnlinkQueue,
+) -> rusqlite::Result<i64> {
     let size: i64 = c.query_row("SELECT size FROM blobs WHERE hash = ?1", [hash], |r| r.get(0))?;
     let n = c.execute("DELETE FROM blobs WHERE hash = ?1", [hash])?;
     if n == 0 {
@@ -272,7 +349,7 @@ pub fn delete_blob(c: &rusqlite::Connection, hash: &[u8; 32], data_dir: &Path) -
     }
     c.execute("DELETE FROM refs WHERE blob_hash = ?1", [hash])?;
     crate::db::bump_counters(c, 0, -size)?;
-    let _ = std::fs::remove_file(blob_path(data_dir, &hex::encode(hash)));
+    unlinks.push(blob_path(data_dir, &hex::encode(hash)));
     Ok(size)
 }
 
@@ -301,6 +378,19 @@ pub fn delete_events(c: &rusqlite::Connection, ids: &[[u8; 32]], data_dir: &Path
 ///   refs>0                        → alive, parent governs
 /// Called after the event sweep and after every eviction pass.
 pub fn blob_pass(c: &rusqlite::Connection, now: i64, data_dir: &Path) -> rusqlite::Result<BlobPassReport> {
+    let mut unlinks = UnlinkQueue::new();
+    let report = blob_pass_with(c, now, data_dir, &mut unlinks)?;
+    unlinks.flush();
+    Ok(report)
+}
+
+/// Transaction-safe variant: file removals are queued for after commit.
+pub fn blob_pass_with(
+    c: &rusqlite::Connection,
+    now: i64,
+    data_dir: &Path,
+    unlinks: &mut UnlinkQueue,
+) -> rusqlite::Result<BlobPassReport> {
     use crate::db::ORPHAN_TTL_SECONDS as ORPHAN;
     let mut report = BlobPassReport::default();
 
@@ -323,7 +413,7 @@ pub fn blob_pass(c: &rusqlite::Connection, now: i64, data_dir: &Path) -> rusqlit
     }
 
     for (h, _size) in report.victims.iter() {
-        let freed = delete_blob(c, h, data_dir)?;
+        let freed = delete_blob_with(c, h, data_dir, unlinks)?;
         report.blob_bytes += freed;
         report.blobs_removed += 1;
     }
@@ -434,6 +524,59 @@ mod tests {
         }
     }
 
+    async fn seed_event(db: &Db, id: [u8; 32], size: i64) {
+        db.write(move |c: &rusqlite::Connection| -> rusqlite::Result<()> {
+            let seq = crate::db::next_event_seq(c)?;
+            c.execute(
+                "INSERT INTO events(id,seq,owner,collection,created_at,expires_at,data,labels,size,state)
+                 VALUES (?1,?2,?3,'c',1,9999999999,x'7b7d','[]',?4,'live')",
+                rusqlite::params![&id[..], seq, &[0u8; 32], size],
+            )?;
+            crate::db::bump_counters(c, size, 0)?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn peer_blob_admission_refuses_instead_of_evicting_events() {
+        let dir = temp_dir("blob-peer-no-evict");
+        init_dirs(&dir).unwrap();
+        let db = Db::open(&dir);
+        let cfg = test_cfg(&dir);
+        seed_event(&db, [9u8; 32], 90).await;
+
+        let peer = staged_file(&dir, [3u8; 32], b"0123456789", "peer");
+        let outcome = install_staged(&db, &cfg, peer, BlobOrigin::Peer)
+            .await
+            .unwrap();
+        assert_eq!(outcome, Install::Refused);
+        let events: i64 = db
+            .read(|c| {
+                c.query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0))
+                    .unwrap()
+            })
+            .await;
+        assert_eq!(events, 1, "peer blob evicted a local event");
+
+        let local = staged_file(&dir, [4u8; 32], b"0123456789", "local");
+        let outcome = install_staged(&db, &cfg, local, BlobOrigin::Local)
+            .await
+            .unwrap();
+        assert_eq!(outcome, Install::Fresh);
+        let events: i64 = db
+            .read(|c| {
+                c.query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0))
+                    .unwrap()
+            })
+            .await;
+        assert_eq!(events, 0, "local admission should still make room");
+
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[tokio::test]
     async fn watermark_refusal_discards_staged_file() {
         let dir = temp_dir("blob-refusal");
@@ -462,7 +605,7 @@ mod tests {
             path: path.clone(),
         };
 
-        let outcome = install_staged(&db, &cfg, staged).await.unwrap();
+        let outcome = install_staged(&db, &cfg, staged, BlobOrigin::Local).await.unwrap();
         assert_eq!(outcome, Install::Refused);
         assert!(!path.exists(), "refused upload left its temp file behind");
 
@@ -488,7 +631,7 @@ mod tests {
         let staged = staged_file(&dir, hash, b"0123456789", "fail");
         let path = staged.path.clone();
 
-        let outcome = install_staged(&db, &cfg, staged).await.unwrap();
+        let outcome = install_staged(&db, &cfg, staged, BlobOrigin::Local).await.unwrap();
         assert_eq!(outcome, Install::Refused);
         assert!(!path.exists(), "failed materialization left its temp file behind");
         let rows: i64 = db
@@ -509,12 +652,26 @@ mod tests {
         let hash = [8u8; 32];
         let dest = blob_path(&dir, &hex::encode(hash));
 
-        let first = install_staged(&db, &cfg, staged_file(&dir, hash, b"abcd", "first")).await.unwrap();
+        let first = install_staged(
+            &db,
+            &cfg,
+            staged_file(&dir, hash, b"abcd", "first"),
+            BlobOrigin::Local,
+        )
+        .await
+        .unwrap();
         assert_eq!(first, Install::Fresh);
         assert_eq!(std::fs::read(&dest).unwrap(), b"abcd");
 
         std::fs::remove_file(&dest).unwrap();
-        let second = install_staged(&db, &cfg, staged_file(&dir, hash, b"abcd", "second")).await.unwrap();
+        let second = install_staged(
+            &db,
+            &cfg,
+            staged_file(&dir, hash, b"abcd", "second"),
+            BlobOrigin::Local,
+        )
+        .await
+        .unwrap();
         assert_eq!(second, Install::Deduped);
         assert_eq!(std::fs::read(&dest).unwrap(), b"abcd", "dedupe did not heal the file");
 

@@ -249,13 +249,24 @@ pub fn event_exists(c: &rusqlite::Connection, id: &[u8; 32]) -> rusqlite::Result
 /// Event row + labels + counters + blob ref in ONE transaction. Re-delivery
 /// of an already-stored event still repairs a missing refs row, so a partial
 /// pre-transaction insert cannot leave the blob unparented forever.
+#[cfg(test)]
 pub fn insert_event_with_ref(c: &rusqlite::Connection, ev: &ParsedEvent) -> rusqlite::Result<bool> {
     let tx = c.unchecked_transaction()?;
-    let inserted = insert_event(&tx, ev)?;
-    if let Some(blob) = ev.blob.as_ref() {
-        crate::store::blobs::attach_ref(&tx, &ev.id, blob)?;
-    }
+    let inserted = insert_event_with_ref_tx(&tx, ev)?;
     tx.commit()?;
+    Ok(inserted)
+}
+
+/// Transaction-scoped variant used when admission (and any eviction it
+/// triggers) must commit or roll back together with the event row.
+pub fn insert_event_with_ref_tx(
+    tx: &rusqlite::Transaction<'_>,
+    ev: &ParsedEvent,
+) -> rusqlite::Result<bool> {
+    let inserted = insert_event(tx, ev)?;
+    if let Some(blob) = ev.blob.as_ref() {
+        crate::store::blobs::attach_ref(tx, &ev.id, blob)?;
+    }
     Ok(inserted)
 }
 
@@ -462,6 +473,68 @@ mod tests {
             })
             .unwrap();
         assert_eq!(seq, 0, "sequence counter advanced on a rolled-back insert");
+    }
+
+    #[test]
+    fn failed_admission_rolls_back_eviction() {
+        let c = rusqlite::Connection::open_in_memory().unwrap();
+        c.execute_batch(crate::db::SCHEMA).unwrap();
+
+        let old_id = [1u8; 32];
+        c.execute(
+            "INSERT INTO events(id,seq,owner,collection,created_at,expires_at,data,labels,size,state)
+             VALUES (?1,0,?2,'c',1,9999999999,x'7b7d','[]',90,'live')",
+            rusqlite::params![&old_id[..], &[0u8; 32]],
+        )
+        .unwrap();
+        crate::db::bump_counters(&c, 90, 0).unwrap();
+
+        let dir = std::env::temp_dir().join(format!(
+            "rabta-admission-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cfg = crate::config::Config {
+            port: 0,
+            data_dir: dir.clone(),
+            storage_max: 100,
+            storage_clamped: false,
+            storage_max_configured: 100,
+            max_single_blob: 10,
+            watermark_bytes: 90,
+            eviction_target_bytes: 85,
+            sse_subscriber_cap: 1,
+            sync_nodes: Vec::new(),
+            sync_interval: std::time::Duration::from_secs(60),
+        };
+
+        c.execute_batch(
+            "CREATE TRIGGER fail_label BEFORE INSERT ON labels
+             BEGIN SELECT RAISE(ABORT, 'boom'); END;",
+        )
+        .unwrap();
+
+        let tx = c.unchecked_transaction().unwrap();
+        let mut unlinks = crate::store::blobs::UnlinkQueue::new();
+        crate::store::reaper::pressure_check_with(&tx, &cfg, 10, true, &mut unlinks).unwrap();
+        let ev = test_event(2, None);
+        assert!(insert_event_with_ref_tx(&tx, &ev).is_err());
+        drop(tx); // rollback
+
+        let old: i64 = c
+            .query_row(
+                "SELECT COUNT(*) FROM events WHERE id=?1",
+                [&old_id[..]],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(old, 1, "eviction survived a failed admission");
+        assert_eq!(crate::db::live_bytes(&c), (90, 0));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

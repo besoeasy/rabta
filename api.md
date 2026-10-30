@@ -591,6 +591,8 @@ Blobs are independent of events until an envelope references their hash.
 | Last parent expires or is evicted | Deleted on the next reaper/pressure pass. |
 | Referenced but bytes never uploaded | Event remains valid; blob reads return `404` until bytes arrive. |
 
+Only referenced blobs participate in peer sync: an unreferenced upload is neither advertised in the blob keyspace nor pulled from a peer.
+
 The reaper runs every 300 seconds and also runs after eviction pressure. Expiry is enforced on reads immediately, so an expired event is invisible before the sweep removes its row.
 
 Content addressing deduplicates bytes: uploading the same body twice returns the existing hash and does not consume additional storage.
@@ -709,7 +711,7 @@ The 16-byte truncation is encoded as base64 with the standard alphabet and no `=
 Range contents:
 
 - `events`: rows with `state='live'` and `expires_at > now`.
-- `blobs`: rows with `state='live'`.
+- `blobs`: rows with `state='live'` that at least one live, unexpired event references. Unreferenced uploads stay local and are never advertised for sync.
 
 **Reconciliation algorithm (built-in client)**
 
@@ -824,6 +826,7 @@ Push one raw blob body. This is the sync-plane counterpart of `PUT /blobs/...`.
 
 - The body is raw bytes; there is no filename or extension gate.
 - Content addressing, the single-blob cap, and the storage watermark still apply.
+- Peer-origin admission never evicts local events to make room. Collectible orphan blobs may be reclaimed; if the body still does not fit, the result is `refused` with `at_watermark`.
 - The SHA-256 is computed while streaming.
 
 **Response**

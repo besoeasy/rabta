@@ -4,7 +4,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::api::AppState;
-use crate::store::blobs::BlobSink;
+use crate::store::blobs::{BlobOrigin, BlobSink};
 
 /// First retry delay for a blob that a peer could not serve; doubles per
 /// consecutive failure up to one hour. This is keyed by (peer, hash), so one
@@ -211,7 +211,7 @@ async fn transfer_blob(n: &AppState, peer: &reqwest::Url, hash_hex: &str) -> boo
         return false;
     }
     matches!(
-        crate::store::blobs::install_staged(&n.db, &n.cfg, staged).await,
+        crate::store::blobs::install_staged(&n.db, &n.cfg, staged, BlobOrigin::Peer).await,
         Ok(crate::store::blobs::Install::Fresh | crate::store::blobs::Install::Deduped)
     )
 }

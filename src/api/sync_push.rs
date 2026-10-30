@@ -8,7 +8,7 @@ use super::blobs_api;
 use super::events::run;
 use super::AppState;
 use crate::error::{ApiError, ApiResult};
-use crate::store::blobs::{Abort, BlobSink, Staged};
+use crate::store::blobs::{Abort, BlobOrigin, BlobSink, Staged};
 
 /// POST /sync/blobs — push one blob body as raw bytes. The sync plane is
 /// exempt from the public door's `.blob`/`.bin` filename gate (it has no
@@ -21,7 +21,7 @@ async fn post_blobs_inner(n: AppState, req: Request<Body>) -> ApiResult<Response
     let staged = stream_body(&n, req).await?;
     let hash_hex = staged.hash_hex.clone();
     let mut result = json!({"hash": hash_hex});
-    match blobs_api::respond_stored(&n, staged).await {
+    match blobs_api::respond_stored(&n, staged, BlobOrigin::Peer).await {
         Ok(resp) => {
             let status = resp.status();
             let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)

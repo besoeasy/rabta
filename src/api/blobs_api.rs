@@ -6,7 +6,7 @@ use axum::Json;
 use serde_json::json;
 
 use crate::error::{ApiError, ApiResult};
-use crate::store::blobs::{self, Abort, BlobSink, Install, Staged};
+use crate::store::blobs::{self, Abort, BlobOrigin, BlobSink, Install, Staged};
 use super::events::run;
 use super::AppState;
 
@@ -75,16 +75,21 @@ async fn put_inner(n: AppState, name: String, req: Request<Body>) -> ApiResult<R
         _ => ApiError::internal("finalize failed"),
     })?;
 
-    respond_stored(&n, staged).await
+    respond_stored(&n, staged, BlobOrigin::Local).await
 }
 
 /// Common finalize for both blob doors: one accept-or-refuse transaction,
 /// then materialize the file. Paths: public raw `PUT` + peer `POST /sync/blobs`.
-pub async fn respond_stored(n: &AppState, staged: Staged) -> ApiResult<Response> {
+/// `origin` decides whether admission may evict live events.
+pub async fn respond_stored(
+    n: &AppState,
+    staged: Staged,
+    origin: BlobOrigin,
+) -> ApiResult<Response> {
     let hash_hex = staged.hash_hex.clone();
     let size = staged.size;
 
-    let outcome = blobs::install_staged(&n.db, &n.cfg, staged)
+    let outcome = blobs::install_staged(&n.db, &n.cfg, staged, origin)
         .await
         .map_err(|e| ApiError::internal(format!("blob row: {e}")))?;
 

@@ -889,6 +889,40 @@ async fn pull_remote_prefix(
     }
 }
 
+/// Which of these blob hashes are still referenced by a live, unexpired local
+/// event? Crafted reconcile replies cannot make us pull an orphan body.
+async fn referenced_blobs(
+    n: &AppState,
+    ids: &[[u8; 32]],
+) -> Result<HashSet<[u8; 32]>, String> {
+    if ids.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let ids = ids.to_vec();
+    let now = reaper::now();
+    n.db.read(move |c: &rusqlite::Connection| {
+        let mut stmt = c
+            .prepare(
+                "SELECT EXISTS(
+                   SELECT 1 FROM refs r JOIN events e ON e.id = r.event_id
+                   WHERE r.blob_hash = ?1 AND e.state='live' AND e.expires_at > ?2
+                 )",
+            )
+            .map_err(|e| e.to_string())?;
+        let mut out = HashSet::new();
+        for id in ids {
+            let exists: i64 = stmt
+                .query_row(rusqlite::params![&id[..], now], |r| r.get(0))
+                .unwrap_or(0);
+            if exists != 0 {
+                out.insert(id);
+            }
+        }
+        Ok(out)
+    })
+    .await
+}
+
 /// Pull a concrete set of remote ids: event envelopes in batches, blob bodies
 /// with bounded concurrency and the existing failure backoff. Returns false
 /// when the tick budget cut the set short (the caller resumes later).
@@ -897,6 +931,15 @@ async fn pull_ids(ctx: &mut Ctx<'_>, ids: &[[u8; 32]]) -> Result<bool, ()> {
         return Ok(true);
     }
     if ctx.kind == Kind::Blobs {
+        let referenced = referenced_blobs(ctx.n, ids).await.map_err(|_| ())?;
+        let ids: Vec<[u8; 32]> = ids
+            .iter()
+            .copied()
+            .filter(|id| referenced.contains(id))
+            .collect();
+        if ids.is_empty() {
+            return Ok(true);
+        }
         if !ctx.http_ready() {
             return Ok(false);
         }
@@ -1158,7 +1201,12 @@ mod tests {
         let staged = sink.finish().unwrap();
         assert_eq!(staged.hash, hash);
         assert_eq!(
-            crate::store::blobs::install_staged(&a.db, &cfg_a, staged)
+            crate::store::blobs::install_staged(
+                &a.db,
+                &cfg_a,
+                staged,
+                crate::store::blobs::BlobOrigin::Local,
+            )
                 .await
                 .unwrap(),
             crate::store::blobs::Install::Fresh

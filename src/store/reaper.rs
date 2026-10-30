@@ -71,6 +71,18 @@ pub fn pass_cap(cfg: &Config) -> i64 {
 /// n_live_referrers(blob)` (pro-rata); tie-break: age ASC, then id ASC.
 /// Capped at ~20% of budget per pass; stop decisions use the real counters.
 pub fn evict_pass(c: &Connection, cfg: &Config, incoming: u64) -> EvictionStats {
+    let mut unlinks = crate::store::blobs::UnlinkQueue::new();
+    let out = evict_pass_with(c, cfg, incoming, &mut unlinks);
+    unlinks.flush();
+    out
+}
+
+fn evict_pass_with(
+    c: &Connection,
+    cfg: &Config,
+    incoming: u64,
+    unlinks: &mut crate::store::blobs::UnlinkQueue,
+) -> EvictionStats {
     let mut out = EvictionStats::default();
 
     let (ev0, bl0) = crate::db::live_bytes(c);
@@ -84,7 +96,7 @@ pub fn evict_pass(c: &Connection, cfg: &Config, incoming: u64) -> EvictionStats 
 
     // Fully collectible blobs are pure overhead: free them before touching
     // any event. This is housekeeping, not chargeable to the pass cap.
-    let report = crate::store::blobs::blob_pass(c, now(), &dir).unwrap_or_default();
+    let report = crate::store::blobs::blob_pass_with(c, now(), &dir, unlinks).unwrap_or_default();
     out.blobs_evicted = report.blobs_removed as u64;
 
     let (ev, bl) = crate::db::live_bytes(c);
@@ -169,7 +181,7 @@ pub fn evict_pass(c: &Connection, cfg: &Config, incoming: u64) -> EvictionStats 
             };
             if let Some(hashes) = exclusive.get(&u.id) {
                 for h in hashes {
-                    crate::store::blobs::delete_blob(c, h, &dir).unwrap_or(0);
+                    crate::store::blobs::delete_blob_with(c, h, &dir, unlinks).unwrap_or(0);
                 }
             }
             let (ev2, bl2) = crate::db::live_bytes(c);
@@ -182,7 +194,7 @@ pub fn evict_pass(c: &Connection, cfg: &Config, incoming: u64) -> EvictionStats 
     }
 
     // Die-with-parent follows every event deletion (blobs with no live refs).
-    let report = crate::store::blobs::blob_pass(c, now(), &dir).unwrap_or_default();
+    let report = crate::store::blobs::blob_pass_with(c, now(), &dir, unlinks).unwrap_or_default();
     out.blobs_evicted += report.blobs_removed as u64;
 
     let (ev2, bl2) = crate::db::live_bytes(c);
@@ -202,7 +214,16 @@ fn sync_cache(ev: i64, bl: i64) {
 
 /// Layer 2 entry for write paths: evict until `live_bytes + incoming` fits
 /// below the 90% watermark; Err(at_watermark) when nothing more can free.
-pub fn pressure_check(c: &Connection, cfg: &Config, incoming: u64) -> Result<(), crate::error::ApiError> {
+/// With `allow_event_eviction == false` (peer blobs), collectible blobs may
+/// still be reclaimed, but live events are never deleted to make room; the
+/// caller gets `at_watermark` instead.
+pub fn pressure_check_with(
+    c: &Connection,
+    cfg: &Config,
+    incoming: u64,
+    allow_event_eviction: bool,
+    unlinks: &mut crate::store::blobs::UnlinkQueue,
+) -> Result<(), crate::error::ApiError> {
     let (ev, bl) = crate::db::live_bytes(c);
     sync_cache(ev, bl);
     // An item that cannot fit even in an empty store must be refused before
@@ -210,14 +231,28 @@ pub fn pressure_check(c: &Connection, cfg: &Config, incoming: u64) -> Result<(),
     if incoming > cfg.watermark_bytes {
         return Err(crate::error::ApiError::at_watermark());
     }
+
+    if !allow_event_eviction {
+        // Reclaim fully collectible blobs once, then refuse if that was not
+        // enough. Never touch the events table on a peer-origin write.
+        let _ = crate::store::blobs::blob_pass_with(c, now(), &cfg.data_dir, unlinks);
+        let (ev, bl) = crate::db::live_bytes(c);
+        sync_cache(ev, bl);
+        let total = (ev + bl).max(0) as u64;
+        if total.saturating_add(incoming) <= cfg.watermark_bytes {
+            return Ok(());
+        }
+        return Err(crate::error::ApiError::at_watermark());
+    }
+
     for _ in 0..40 {
         let (ev, bl) = crate::db::live_bytes(c);
         let total = (ev + bl).max(0) as u64;
         sync_cache(ev, bl);
-        if total + incoming <= cfg.watermark_bytes {
+        if total.saturating_add(incoming) <= cfg.watermark_bytes {
             return Ok(());
         }
-        let out = evict_pass(c, cfg, incoming);
+        let out = evict_pass_with(c, cfg, incoming, unlinks);
         if out.events_evicted == 0 && out.blobs_evicted == 0 {
             return Err(crate::error::ApiError::at_watermark());
         }

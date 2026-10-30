@@ -88,15 +88,23 @@ async fn insert_event_with_blob(n: &AppState, ev: &events::ParsedEvent) -> ApiRe
     let out: ApiResult<bool> = n
         .db
         .write(move |c: &rusqlite::Connection| -> ApiResult<bool> {
+            let tx = c
+                .unchecked_transaction()
+                .map_err(|e| ApiError::internal(format!("event begin: {e}")))?;
+            let mut unlinks = crate::store::blobs::UnlinkQueue::new();
+
             // Duplicates add no bytes: check first so a retry cannot evict
             // unrelated events for a write that will not consume space.
-            let exists = events::event_exists(c, &ev2.id)
+            let exists = events::event_exists(&tx, &ev2.id)
                 .map_err(|e| ApiError::internal(format!("event lookup: {e}")))?;
             if !exists {
-                reaper::pressure_check(c, &cfg, ev2.size as u64)?;
+                reaper::pressure_check_with(&tx, &cfg, ev2.size as u64, true, &mut unlinks)?;
             }
-            let inserted = events::insert_event_with_ref(c, &ev2)
+            let inserted = events::insert_event_with_ref_tx(&tx, &ev2)
                 .map_err(|e| ApiError::internal(format!("event insert: {e}")))?;
+            tx.commit()
+                .map_err(|e| ApiError::internal(format!("event commit: {e}")))?;
+            unlinks.flush();
             Ok(inserted)
         })
         .await;

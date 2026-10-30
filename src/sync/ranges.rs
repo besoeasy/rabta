@@ -174,15 +174,21 @@ pub fn summary(
             }
         }
         Kind::Blobs => {
+            // Only advertise blobs a live, unexpired event still references.
+            // Unreferenced uploads must not replicate and consume peer storage.
             let mut stmt = c
                 .prepare(
-                    "SELECT hash FROM blobs
-                     WHERE state='live' AND hash >= ?1 AND hash <= ?2
-                     ORDER BY hash",
+                    "SELECT hash FROM blobs b
+                     WHERE b.state='live' AND b.hash >= ?2 AND b.hash <= ?3
+                       AND EXISTS (
+                         SELECT 1 FROM refs r JOIN events e ON e.id = r.event_id
+                         WHERE r.blob_hash = b.hash AND e.state='live' AND e.expires_at > ?1
+                       )
+                     ORDER BY b.hash",
                 )
                 .map_err(|e| e.to_string())?;
             let mut rows = stmt
-                .query(rusqlite::params![&lo[..], &hi[..]])
+                .query(rusqlite::params![now, &lo[..], &hi[..]])
                 .map_err(|e| e.to_string())?;
             while let Some(row) = rows.next().map_err(|e| e.to_string())? {
                 let raw: Vec<u8> = row.get(0).map_err(|e| e.to_string())?;
@@ -260,21 +266,29 @@ pub fn ids_page(
         }
         Kind::Blobs => {
             let sql = if after.is_some() {
-                "SELECT hash FROM blobs
-                 WHERE state='live' AND hash >= ?1 AND hash <= ?2 AND hash > ?3
-                 ORDER BY hash LIMIT ?4"
+                "SELECT hash FROM blobs b
+                 WHERE b.state='live' AND b.hash >= ?1 AND b.hash <= ?2 AND b.hash > ?3
+                   AND EXISTS (
+                     SELECT 1 FROM refs r JOIN events e ON e.id = r.event_id
+                     WHERE r.blob_hash = b.hash AND e.state='live' AND e.expires_at > ?4
+                   )
+                 ORDER BY b.hash LIMIT ?5"
             } else {
-                "SELECT hash FROM blobs
-                 WHERE state='live' AND hash >= ?1 AND hash <= ?2
-                 ORDER BY hash LIMIT ?3"
+                "SELECT hash FROM blobs b
+                 WHERE b.state='live' AND b.hash >= ?1 AND b.hash <= ?2
+                   AND EXISTS (
+                     SELECT 1 FROM refs r JOIN events e ON e.id = r.event_id
+                     WHERE r.blob_hash = b.hash AND e.state='live' AND e.expires_at > ?3
+                   )
+                 ORDER BY b.hash LIMIT ?4"
             };
             let mut stmt = c.prepare(sql).map_err(|e| e.to_string())?;
             let mut rows = match after {
                 Some(a) => stmt
-                    .query(rusqlite::params![&lo[..], &hi[..], &a[..], want])
+                    .query(rusqlite::params![&lo[..], &hi[..], &a[..], now, want])
                     .map_err(|e| e.to_string())?,
                 None => stmt
-                    .query(rusqlite::params![&lo[..], &hi[..], want])
+                    .query(rusqlite::params![&lo[..], &hi[..], now, want])
                     .map_err(|e| e.to_string())?,
             };
             while let Some(row) = rows.next().map_err(|e| e.to_string())? {
@@ -522,6 +536,43 @@ mod tests {
 
         let blob_like = summary(&c, Kind::Blobs, "1", 1000).unwrap();
         assert_eq!(blob_like.count, 0);
+    }
+
+    #[test]
+    fn blob_summaries_only_include_referenced_live_blobs() {
+        let c = memdb();
+        let mut blob = [0u8; 32];
+        blob[0] = 0x11;
+        let mut event = [0u8; 32];
+        event[0] = 0x22;
+        c.execute(
+            "INSERT INTO blobs(hash,size,stored_at,ever_attached,state)
+             VALUES (?1,10,1,0,'live')",
+            [&blob[..]],
+        )
+        .unwrap();
+
+        let s = summary(&c, Kind::Blobs, "", 1000).unwrap();
+        assert_eq!(s.count, 0, "unreferenced blob was advertised");
+        let (page, _) = ids_page(&c, Kind::Blobs, "", None, 10, 1000).unwrap();
+        assert!(page.is_empty());
+
+        insert_event(&c, event, 10);
+        c.execute(
+            "INSERT INTO refs(event_id,blob_hash) VALUES (?1,?2)",
+            [&event[..], &blob[..]],
+        )
+        .unwrap();
+        let s = summary(&c, Kind::Blobs, "", 1000).unwrap();
+        assert_eq!(s.count, 1);
+        let (page, _) = ids_page(&c, Kind::Blobs, "", None, 10, 1000).unwrap();
+        assert_eq!(page, vec![blob]);
+
+        // An expired event no longer keeps its blob in the sync keyspace.
+        c.execute("UPDATE events SET expires_at = 999 WHERE id = ?1", [&event[..]])
+            .unwrap();
+        let s = summary(&c, Kind::Blobs, "", 1000).unwrap();
+        assert_eq!(s.count, 0);
     }
 
     #[test]
