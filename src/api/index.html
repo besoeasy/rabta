@@ -549,7 +549,7 @@
     const COLLECTION = 'canvas/draw';
     const TTL = 300; // 5 minutes
     const MAX_POINTS = 1200;
-    const MAX_PAGES = 4;
+    const MAX_PAGES = 1000;
     const STORE_ID = 'rabta.canvas.identity.v1';
 
     const strokes = [];
@@ -844,7 +844,7 @@
         for (const event of collected) addEvent(event);
       } catch {}
       pollBusy = false;
-      pollTimer = setTimeout(poll, 4000);
+      pollTimer = setTimeout(poll, 2000);
     };
 
     const sha256 = (data) => {
