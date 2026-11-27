@@ -837,6 +837,7 @@ const owner = `ed25519:${rawPublicKey.toString('hex')}`;
 
 const now = Math.floor(Date.now() / 1000);
 const fields = {
+  blobs: [],
   collection: 'chat/room-42',
   created_at: now,
   expires_at: now + 24 * 60 * 60,

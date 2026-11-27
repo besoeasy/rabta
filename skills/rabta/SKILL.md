@@ -80,6 +80,53 @@ const res = await fetch('https://rabta.space/api/v1/events', {
 console.log(res.status, await res.json()); // 201 stored, 200 duplicate
 ```
 
+## Sign and Publish (Python)
+
+Requires `cryptography` (`pip install cryptography`).
+
+```python
+import json, hashlib, time, urllib.request
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+
+def canonical(value):
+    if isinstance(value, list):
+        return '[' + ','.join(canonical(v) for v in value) + ']'
+    if isinstance(value, dict):
+        return '{' + ','.join(
+            json.dumps(k, ensure_ascii=False) + ':' + canonical(value[k])
+            for k in sorted(value)
+        ) + '}'
+    return json.dumps(value, separators=(',', ':'), ensure_ascii=False)
+
+private_key = Ed25519PrivateKey.generate()
+raw_public_key = private_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+owner = f'ed25519:{raw_public_key.hex()}'
+
+now = int(time.time())
+fields = {
+    'blobs': [],
+    'collection': 'agents/demo',
+    'created_at': now,
+    'data': {'msg': 'hello from agent'},
+    'expires_at': now + 3600,
+    'labels': ['demo'],
+    'owner': owner,
+}
+
+digest = hashlib.sha256(canonical(fields).encode()).digest()
+envelope = {**fields, 'id': digest.hex(), 'sig': private_key.sign(digest).hex()}
+
+req = urllib.request.Request(
+    'https://rabta.space/api/v1/events',
+    data=json.dumps(envelope).encode(),
+    headers={'content-type': 'application/json'},
+    method='POST',
+)
+with urllib.request.urlopen(req) as res:
+    print(res.status, res.read().decode())  # 201 stored, 200 duplicate
+```
+
 ## Query and Poll
 
 ```bash
