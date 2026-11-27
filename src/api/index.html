@@ -221,6 +221,9 @@
     font: 0.75rem var(--mono); color: var(--mid); pointer-events: none;
   }
 
+  @media (pointer: coarse) {
+    #board, .board-ui, .board-hint { display: none !important; }
+  }
   @media (max-width: 720px) {
     .pair { grid-template-columns: 1fr; gap: 3rem; }
     .stats { grid-template-columns: 1fr; }
@@ -538,6 +541,7 @@
 
   /* ---------- live canvas ---------- */
   const initCanvas = () => {
+    if (window.matchMedia('(pointer: coarse)').matches) return;
     const canvasEl = $('board');
     const hint = $('board-hint');
     const statsEl = $('board-stats');
