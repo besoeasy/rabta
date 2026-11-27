@@ -811,10 +811,16 @@
       try {
         do {
           const body = await fetchPage(cursor);
-          if (Array.isArray(body.events)) collected.push(...body.events);
+          const pageEvents = Array.isArray(body.events) ? body.events : [];
+          collected.push(...pageEvents);
           cursor = body.next_cursor || null;
           pages += 1;
-        } while (cursor && pages < MAX_PAGES);
+          const last = pageEvents[pageEvents.length - 1];
+          const lastExp = last
+            ? (Number.isFinite(Number(last.expires_at)) ? Number(last.expires_at) : (Number(last.created_at) || 0) + TTL)
+            : 0;
+          if (!cursor || pages >= MAX_PAGES || collected.length >= 1500 || (pageEvents.length > 0 && lastExp <= now())) break;
+        } while (true);
         collected.sort(compareEvents);
         for (const event of collected) addEvent(event);
       } catch {}
