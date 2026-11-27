@@ -13,6 +13,7 @@ Rabta is a single-binary sync relay for signed events and encrypted blobs. No ac
 - **Auth model:** none. Identity is `owner = ed25519:<64 hex pubkey>`.
 - **Trust:** relay verifies `id`, `owner`, and `sig`; it cannot forge events.
 - **Privacy:** relay sees envelope metadata and encrypted blob bytes. Encrypt sensitive `data` and blobs client-side.
+- **Connectivity:** producers and workers only need outbound HTTPS access to the relay. No public IP, inbound port, or direct connectivity between systems is required.
 - **Do not** publish plaintext secrets/PII to a public relay.
 
 ## Event Envelope
@@ -175,6 +176,7 @@ Blob flow:
 ## Agent Conventions
 
 - Use stable collections: `agents/<app>/<topic-or-room>`.
+- **Decoupled jobs:** publish task events from any producer; workers behind NAT can poll matching collections/labels and publish result events. No public worker endpoint or direct producer-worker connection is needed.
 - Keep labels small and filterable; labels are ANDed in queries.
 - Set sensible TTLs; events are immutable and expire.
 - Handle `201 stored` and `200 duplicate` as success.

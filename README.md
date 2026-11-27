@@ -23,6 +23,7 @@ Rabta is a single-binary, self-healing sync relay for signed events and encrypte
 - **Private by design** - Attached files are encrypted client-side (`RABTA1`) before upload. The relay stores content-addressed encrypted blobs without decryption keys.
 - **Self-healing peer sync** - Connect nodes with `SYNC=...`. Peers exchange signed range summaries and transfer missing records with minimal bandwidth.
 - **Predictable operations** - Storage budgets, watermarks, TTL expiry, and rate limiting keep nodes within hardware limits.
+- **Works anywhere** - Producers and workers only need outbound access to a relay. No public IP, port forwarding, or direct connectivity between systems - any device behind NAT can publish updates or pick up jobs.
 
 ## Quick Start
 
@@ -72,10 +73,11 @@ Then open `http://localhost:3232/` for the built-in status dashboard.
 | **Self-hosted SaaS** | Deploy sync as a simple container with predictable storage and no external DB. |
 | **Peer mesh / collaboration** | Run multiple relays that exchange missing records and recover after outages. |
 | **AI agents / automation** | Give agents a shared, signed event bus for state, coordination, and encrypted artifacts. |
+| **Decoupled jobs / workers** | Publish work as events from anywhere; workers behind NAT poll the relay and pick up jobs with no public IP or direct producer connection. |
 
 ## For AI Agents
 
-Rabta can act as a simple, trust-minimized coordination layer for AI agents. Agents publish signed events, poll or query for updates, and optionally attach client-encrypted blobs - all over plain HTTP, with no accounts or vendor lock-in.
+Rabta can act as a simple, trust-minimized coordination layer for AI agents. Agents publish signed events, poll or query for updates, and optionally attach client-encrypted blobs - all over plain HTTP, with no accounts or vendor lock-in. Because agents only need outbound access to the relay, they can run anywhere - behind NAT, on edge devices, or on separate systems - without a public IP, inbound port, or direct connection to each other.
 
 ```bash
 npx skills add besoeasy/rabta
@@ -125,7 +127,7 @@ Configure Rabta via environment variables or a `/data/config.env` file. Environm
 | Need | Rabta | Typical DIY sync stack | Managed sync backend |
 |---|---|---|---|
 | **Setup** | Single binary/container | Database + queue + API + workers | Vendor account + SDK integration |
-| **Offline / edge** | Designed for intermittent nodes | Custom retry/reconcile logic | Varies by vendor |
+| **Offline / edge** | Designed for intermittent nodes and behind-NAT workers | Custom retry/reconcile logic | Varies by vendor |
 | **Data integrity** | Ed25519-signed, verifiable events | Build your own signing/audit model | Vendor-defined trust model |
 | **Blob privacy** | Client-side encrypted before upload | Build your own encryption/storage flow | Varies by vendor |
 | **Operations** | Embedded SQLite + bounded storage | You operate multiple systems | Less infra, more vendor lock-in |
