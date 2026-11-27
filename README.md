@@ -1,41 +1,32 @@
 # Rabta
 
-**The self-healing sync relay for local-first apps and peer meshes.**
+**Sync for local-first apps, without running a cloud.**
 
-Rabta is an append-only, content-addressed sync relay for signed events and encrypted files. It runs as a single lightweight binary or Docker container with zero external dependencies, no database servers to manage, and no schema migrations.
+Rabta is a single-binary, self-healing sync relay for signed events and encrypted files. Build offline-capable sync with SQLite storage, Ed25519 verification, and peer-to-peer reconciliation - no database cluster, no message broker, no vendor lock-in.
 
-![API v1](https://img.shields.io/badge/API-v1-blue)
-![Platforms](https://img.shields.io/badge/platforms-amd64%20%7C%20arm64-informational)
-![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green)
+**Best for:** local-first apps, edge devices, self-hosted products, peer meshes, and teams that want sync without backend ops.
 
-[**API Reference**](api.md) · [**Quick Start**](#quick-start) · [**Configuration**](#configuration)
+[![API v1](https://img.shields.io/badge/API-v1-blue)](api.md)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-green)](#license)
+[![Platforms](https://img.shields.io/badge/platforms-amd64%20%7C%20arm64-informational)](https://github.com/besoeasy/rabta/releases/latest)
+[![Release](https://img.shields.io/github/v/release/besoeasy/rabta)](https://github.com/besoeasy/rabta/releases/latest)
+[![Checks](https://github.com/besoeasy/rabta/actions/workflows/checks.yml/badge.svg)](https://github.com/besoeasy/rabta/actions/workflows/checks.yml)
 
----
-
-## What Problem Does It Solve?
-
-Building sync for decentralized, local-first, or edge applications traditionally requires complex cloud backends:
-- **Centralized Cloud Lock-in**: Heavy dependence on managed cloud platforms or proprietary services.
-- **Operational Burden**: Managing and babysitting database clusters, replication topologies, migrations, and message brokers.
-- **Trust Assumptions**: Servers have the power to view, modify, or forge user records.
-- **Network Brittleness**: Systems break or fail when nodes operate offline, across intermittent links, or at the edge.
-
-## Why Do You Need Rabta?
-
-Rabta provides a self-contained, trust-minimized building block:
-- **Zero Babysitting**: Single static binary or container. SQLite, blob storage, and peer sync are completely self-managed and embedded.
-- **Cryptographic Trust**: Every event is Ed25519-signed and verified. Relays and peers cannot forge or tamper with records.
-- **Zero-Knowledge Blob Storage**: Attached files must be encrypted client-side (`RABTA1` container). The relay stores content-addressed encrypted blobs without ever holding decryption keys.
-- **Autonomous Peer-to-Peer Sync**: Connect nodes with a single environment variable (`SYNC`). Nodes exchange range summaries and self-heal missing records in 1 round trip.
-- **Bounded Resources & Abuse Resistance**: Built-in work battery rate-limiting, storage watermarks, and automated TTL/storage-pressure eviction ensure nodes never exceed their hardware limits.
+[**Website**](https://rabta.space) · [**API Reference**](api.md) · [**Quick Start**](#quick-start) · [**Configuration**](#configuration) · [**Security Model**](#security-model)
 
 ---
+
+## Why Rabta
+
+- **One binary, zero dependencies** - SQLite, blob storage, and peer sync are embedded. Run it as a static binary or Docker container.
+- **Cryptographic trust** - Every event is Ed25519-signed and verified. Relays and peers cannot forge or tamper with records.
+- **Private by design** - Attached files are encrypted client-side (`RABTA1`) before upload. The relay stores content-addressed encrypted blobs without decryption keys.
+- **Self-healing peer sync** - Connect nodes with `SYNC=...`. Peers exchange signed range summaries and transfer missing records with minimal bandwidth.
+- **Predictable operations** - Storage budgets, watermarks, TTL expiry, and rate limiting keep nodes within hardware limits.
 
 ## Quick Start
 
-### Docker
-
-Run the official image with Docker:
+### Docker (recommended)
 
 ```bash
 docker run -d \
@@ -47,40 +38,57 @@ docker run -d \
   ghcr.io/besoeasy/rabta:latest
 ```
 
-Verify your node is online:
+### Native Linux
+
+Prebuilt static musl binaries are available for `x86_64` (amd64) and `aarch64` (arm64) on the [Releases](https://github.com/besoeasy/rabta/releases/latest) page.
+
+```bash
+# x86_64 / amd64
+curl -fsSL https://github.com/besoeasy/rabta/releases/latest/download/rabta-linux-amd64 -o rabta
+chmod +x rabta
+
+DATA=./data PORT=3232 ./rabta
+```
+
+For ARM64 devices (Raspberry Pi, AWS Graviton), download `rabta-linux-arm64`.
+
+### Verify it’s running
 
 ```bash
 curl -fsS http://localhost:3232/api/v1/health
 curl -fsS http://localhost:3232/api/v1/node
 ```
 
-Visit `http://localhost:3232/` in your browser to inspect the node's built-in status dashboard.
+Then open `http://localhost:3232/` for the built-in status dashboard.
 
-### Native Linux Install
+**Next:** publish signed events and encrypted blobs through the [API Reference](api.md). Rabta verifies signatures, stores immutable records, and lets peers reconcile missing data automatically.
 
-Prebuilt static musl binaries are available for `x86_64` (amd64) and `aarch64` (arm64) on each [Release](https://github.com/besoeasy/rabta/releases/latest). No runtime dependencies or glibc required.
+## Use Cases
 
-```bash
-# Download the binary (for x86_64 / amd64)
-curl -fsSL https://github.com/besoeasy/rabta/releases/latest/download/rabta-linux-amd64 -o rabta
-chmod +x rabta
+| Use case | What Rabta gives you |
+|---|---|
+| **Local-first app** | Sync user data across devices without a managed cloud database. |
+| **Edge / IoT fleet** | Collect signed events from intermittent nodes and let them catch up later. |
+| **Self-hosted SaaS** | Deploy sync as a simple container with predictable storage and no external DB. |
+| **Peer mesh / collaboration** | Run multiple relays that exchange missing records and recover after outages. |
 
-# Run directly
-DATA=./data PORT=3232 ./rabta
-```
+## How It Works
 
-*(For ARM64 devices such as Raspberry Pi or AWS Graviton, download `rabta-linux-arm64`.)*
+1. **Publish Event** - Clients sign an envelope with an Ed25519 private key and submit it to `POST /api/v1/events`.
+2. **Attach Blobs** - Large files are encrypted client-side and uploaded via `PUT /api/v1/blobs`. Events reference blobs by SHA-256 hash.
+3. **Query** - Clients query events by collection, owner, labels, or time ranges with conditional caching (`ETag` / `If-None-Match`) via `GET /api/v1/events`.
+4. **Reconcile** - Nodes periodically exchange signed `POST /api/v1/sync` requests containing XOR range summaries to pinpoint and transfer missing records with minimal bandwidth.
 
----
+See the [**API Reference**](api.md) for wire format, signing rules, routes, and client examples.
 
 ## Configuration
 
-Configure Rabta via environment variables or by placing a `/data/config.env` file. Environment variables take precedence.
+Configure Rabta via environment variables or a `/data/config.env` file. Environment variables take precedence.
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | `PORT` | `3232` | TCP port for the HTTP API and dashboard. |
-| `DATA` | `/data` | Path to the directory where SQLite database, blobs, and keys are stored. |
+| `DATA` | `/data` | Directory for SQLite database, blobs, and keys. |
 | `STORAGE` | `20GB` | Maximum disk storage for events and blobs before pressure eviction triggers. |
 | `POLICY` | *None* | JSON rules exempting matching events/blobs from pressure eviction (e.g. `{"rules":[{"owner":["ed25519:..."]}]}`). TTL expiry still applies. |
 | `SYNC` | *None* | Comma-separated list of up to 4 peer relay URLs (e.g. `https://relay-a.space,https://relay-b.space`). |
@@ -88,18 +96,34 @@ Configure Rabta via environment variables or by placing a `/data/config.env` fil
 | `BITCOIN` | *None* | Optional on-chain Bitcoin donation address displayed on `GET /api/v1/node` and the web dashboard. |
 | `RUST_LOG` | `info` | Logging verbosity (`error`, `warn`, `info`, `debug`). |
 
----
+## Why Teams Pick Rabta
 
-## How It Works
+| Need | Rabta | Typical DIY sync stack | Managed sync backend |
+|---|---|---|---|
+| **Setup** | Single binary/container | Database + queue + API + workers | Vendor account + SDK integration |
+| **Offline / edge** | Designed for intermittent nodes | Custom retry/reconcile logic | Varies by vendor |
+| **Data integrity** | Ed25519-signed, verifiable events | Build your own signing/audit model | Vendor-defined trust model |
+| **Blob privacy** | Client-side encrypted before upload | Build your own encryption/storage flow | Varies by vendor |
+| **Operations** | Embedded SQLite + bounded storage | You operate multiple systems | Less infra, more vendor lock-in |
 
-1. **Publish Event**: Clients sign an envelope with their Ed25519 private key and submit it to `POST /api/v1/events`.
-2. **Attach Blobs**: Large files are encrypted client-side and uploaded via `PUT /api/v1/blobs`. Events reference blobs by SHA-256 hash.
-3. **Query**: Clients query events by collection, owner, tags, or time ranges with conditional caching (`ETag` / `If-None-Match`) via `GET /api/v1/events`.
-4. **Reconcile**: Nodes periodically exchange signed `POST /api/v1/sync` requests containing XOR range summaries to pinpoint and transfer missing records with minimal bandwidth.
+## Security Model
 
-See [**api.md**](api.md) for the complete API reference and schema details.
+Rabta is designed to be trust-minimized, not magic.
 
----
+- **Verifies:** Ed25519 signatures, event IDs, blob hashes, and canonical envelope rules.
+- **Stores:** signed event envelopes, metadata visible in the envelope, and encrypted blob bytes on the node’s disk.
+- **Does not do:** account management, server-side payload decryption, or key custody.
+- **Your responsibility:** encrypt sensitive `data` and blobs client-side, protect private keys, and put public nodes behind TLS/reverse proxy controls when needed.
+
+Read the full wire and threat-relevant details in the [API Reference](api.md).
+
+## Get Started
+
+- [Deploy with Docker](#quick-start)
+- [Read the API Reference](api.md)
+- [Visit rabta.space](https://rabta.space)
+- [View releases](https://github.com/besoeasy/rabta/releases)
+- [Report an issue](https://github.com/besoeasy/rabta/issues)
 
 ## License
 
