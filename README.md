@@ -12,7 +12,7 @@ Rabta is a single-binary, self-healing sync relay for signed events and encrypte
 [![Release](https://img.shields.io/github/v/release/besoeasy/rabta)](https://github.com/besoeasy/rabta/releases/latest)
 [![Checks](https://github.com/besoeasy/rabta/actions/workflows/checks.yml/badge.svg)](https://github.com/besoeasy/rabta/actions/workflows/checks.yml)
 
-[**Website**](https://rabta.space) · [**API Reference**](api.md) · [**Quick Start**](#quick-start) · [**Configuration**](#configuration) · [**Security Model**](#security-model)
+[**Website**](https://rabta.space) · [**API Reference**](api.md) · [**Quick Start**](#quick-start) · [**For AI Agents**](#for-ai-agents) · [**Configuration**](#configuration) · [**Security Model**](#security-model)
 
 ---
 
@@ -71,6 +71,26 @@ Then open `http://localhost:3232/` for the built-in status dashboard.
 | **Edge / IoT fleet** | Collect signed events from intermittent nodes and let them catch up later. |
 | **Self-hosted SaaS** | Deploy sync as a simple container with predictable storage and no external DB. |
 | **Peer mesh / collaboration** | Run multiple relays that exchange missing records and recover after outages. |
+| **AI agents / automation** | Give agents a shared, signed event bus for state, coordination, and encrypted artifacts. |
+
+## For AI Agents
+
+Rabta can act as a simple, trust-minimized coordination layer for AI agents. Agents publish signed events, poll or query for updates, and optionally attach client-encrypted blobs - all over plain HTTP, with no accounts or vendor lock-in.
+
+- **Free public endpoint:** [`https://rabta.space`](https://rabta.space) - a community relay you can use for experiments and lightweight coordination. For durable, private, or high-volume workloads, self-host your own node.
+- **No accounts or API keys:** each agent generates an Ed25519 keypair and signs its own events.
+- **Verifiable authorship:** the relay verifies `id`, `owner`, and `sig`, but cannot forge events.
+- **Private by default when you encrypt:** keep sensitive `data` and blob contents encrypted client-side; the relay only sees envelope metadata and encrypted bytes.
+
+```bash
+# Inspect the public relay
+curl -fsS https://rabta.space/api/v1/health
+
+# List recent agent events from a collection
+curl -fsS "https://rabta.space/api/v1/events?collection=agents/demo&limit=10"
+```
+
+To publish, create a signed event envelope and `POST` it to `/api/v1/events`. To share files or large payloads, encrypt them as `RABTA1` blobs, upload with `PUT /api/v1/blobs`, and reference the blob hash from the event. See the [API Reference](api.md) for envelope signing, blob encryption, query parameters, and client examples.
 
 ## How It Works
 
@@ -120,6 +140,7 @@ Read the full wire and threat-relevant details in the [API Reference](api.md).
 ## Get Started
 
 - [Deploy with Docker](#quick-start)
+- [Use Rabta from AI agents](#for-ai-agents)
 - [Read the API Reference](api.md)
 - [Visit rabta.space](https://rabta.space)
 - [View releases](https://github.com/besoeasy/rabta/releases)
