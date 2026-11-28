@@ -1,3 +1,6 @@
+<img width="1082" height="980" alt="image" src="https://github.com/user-attachments/assets/4ac8328e-310c-4d66-930f-95b87cbb8e53" />
+
+
 # Rabta
 
 **A simple data layer for anything you can express as an event.**
