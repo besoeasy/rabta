@@ -11,20 +11,6 @@ Use it as an app database or shared data store, an append-only log, an AI-agent 
 
 > Rabta is an immutable event store, not a SQL database for in-place row updates. Events expire by TTL and storage pressure can evict data, so self-host it when you need control over retention and durability.
 
-## Try the public node
-
-**[Rabta.Space — the project website and live public node](https://rabta.space/)**
-
-Explore the dashboard, or try the API:
-
-```bash
-curl -fsS https://rabta.space/api/v1/health
-curl -fsS https://rabta.space/api/v1/node
-curl -fsS "https://rabta.space/api/v1/events?collection=agents/demo&limit=10"
-```
-
-The community node is useful for experiments and demos. Treat anything you publish there as public, don't send plaintext secrets or personal data, and don't rely on it for permanent storage. For private, durable, or high-volume use, run your own node.
-
 ## Run with Docker
 
 Docker is the fastest way to start a node. The named volume keeps its database and blobs across container restarts.
