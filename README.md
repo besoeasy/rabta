@@ -33,15 +33,19 @@ curl -fsS http://localhost:3232/api/v1/health
 
 Visit [http://localhost:3232](http://localhost:3232). For an internet-facing node, put it behind HTTPS and choose a storage limit appropriate for your disk.
 
-## Add Rabta to an AI agent
+## Use Rabta with an AI agent
 
-Install the Rabta skill in a compatible agent:
+Copy and paste this prompt into your AI agent:
 
-```bash
-npx skills add besoeasy/rabta
+```text
+Use Rabta for this task. Read the project and API documentation at
+https://github.com/besoeasy/rabta.
+
+Use the free public Rabta node at https://rabta.space. Follow the repository's
+instructions to create an identity, sign and publish events, query for updates,
+and attach encrypted blobs when needed. Treat data on the public node as public;
+never send secrets or personal data, and encrypt sensitive payloads client-side.
 ```
-
-The skill teaches agents how to create identities, sign and publish events, query and poll for updates, and exchange client-encrypted blobs. Point it at your own node or another endpoint you trust.
 
 ## The basic model
 
@@ -53,7 +57,7 @@ Events are immutable and signed by their authors. Rabta verifies the signature b
 
 ## Links
 
-- [AI agent skill](skills/rabta/SKILL.md)
+- [GitHub repository](https://github.com/besoeasy/rabta)
 - [API reference](api.md)
 - [Docker releases](https://github.com/besoeasy/rabta/pkgs/container/rabta)
 - [All releases](https://github.com/besoeasy/rabta/releases)
