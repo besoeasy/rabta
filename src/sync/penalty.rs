@@ -2,6 +2,7 @@
 use rusqlite::{Connection, OptionalExtension, params};
 
 pub const BASE_POLL_MS: u64 = 5_000;
+const PEER_SEEN_REFRESH_SECONDS: i64 = 60 * 60;
 
 #[derive(Debug, Clone)]
 pub struct PeerRecord {
@@ -32,11 +33,20 @@ pub fn get_or_create_peer(c: &Connection, url: &str, now: i64) -> rusqlite::Resu
         .optional()?;
 
     match row {
-        Some(p) => Ok(p),
+        Some(p) => {
+            c.execute(
+                "UPDATE sync_peers
+                    SET last_seen_at = ?1
+                  WHERE url = ?2 AND last_seen_at < ?3",
+                params![now, url, now.saturating_sub(PEER_SEEN_REFRESH_SECONDS)],
+            )?;
+            Ok(p)
+        }
         None => {
             c.execute(
-                "INSERT INTO sync_peers (url, penalty, strikes, penalty_at, next_poll_at)
-                 VALUES (?1, 1.0, 0, ?2, ?2)",
+                "INSERT INTO sync_peers
+                    (url, penalty, strikes, penalty_at, next_poll_at, last_seen_at)
+                 VALUES (?1, 1.0, 0, ?2, ?2, ?2)",
                 params![url, now],
             )?;
             Ok(PeerRecord {
@@ -85,6 +95,27 @@ pub fn record_peer_clean(c: &Connection, url: &str, now: i64) -> rusqlite::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn peer_lookup_refreshes_stale_activity_timestamp() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(crate::db::SCHEMA).unwrap();
+        c.execute(
+            "INSERT INTO sync_peers (url, last_seen_at) VALUES ('peer:test', 100)",
+            [],
+        )
+        .unwrap();
+
+        get_or_create_peer(&c, "peer:test", 10_000).unwrap();
+        let seen: i64 = c
+            .query_row(
+                "SELECT last_seen_at FROM sync_peers WHERE url = 'peer:test'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(seen, 10_000);
+    }
 
     #[test]
     fn test_constant_poll_and_penalty() {

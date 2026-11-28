@@ -9,6 +9,14 @@ use crate::db::Db;
 /// Periodic maintenance cadence. The startup pass runs immediately; after
 /// that, idle nodes still reclaim expired data without waiting an hour.
 pub const REAPER_INTERVAL: Duration = Duration::from_secs(300);
+/// Forget inactive, non-configured peer state after three months.
+const PEER_STATE_TTL_SECONDS: i64 = 90 * 24 * 60 * 60;
+/// Run a full SQLite compaction at most once per day.
+const COMPACT_INTERVAL_SECONDS: i64 = 24 * 60 * 60;
+/// Compact only when at least this much space is free and at least 20% of the
+/// database is reclaimable, avoiding expensive VACUUMs for small churn.
+const COMPACT_MIN_FREE_BYTES: u64 = 16 * 1024 * 1024;
+static LAST_COMPACT_AT: AtomicI64 = AtomicI64::new(0);
 
 pub fn now() -> i64 {
     SystemTime::now()
@@ -427,6 +435,65 @@ fn sync_cache(c: &Connection) {
     COUNTERS.live_blobs_cache.store(cl, Ordering::Relaxed);
 }
 
+/// Remove stale peer diagnostics and their cached battery snapshots. Peers
+/// explicitly configured for outbound sync are retained even while offline.
+fn prune_stale_peers(c: &Connection, cfg: &Config, now: i64) -> rusqlite::Result<(u64, u64)> {
+    let cutoff = now.saturating_sub(PEER_STATE_TTL_SECONDS);
+    let stale_urls = {
+        let mut stmt = c.prepare("SELECT url FROM sync_peers WHERE last_seen_at < ?1")?;
+        let rows = stmt.query_map([cutoff], |r| r.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    let mut peers_removed = 0;
+    for url in stale_urls {
+        if cfg.sync_nodes.iter().any(|configured| configured == &url) {
+            continue;
+        }
+        peers_removed += c.execute("DELETE FROM sync_peers WHERE url = ?1", [&url])? as u64;
+    }
+
+    // This is display/cache data, not authoritative peer state. Expire old
+    // snapshots independently and remove any left behind by a deleted peer.
+    let batteries_removed = c.execute(
+        "DELETE FROM peer_battery
+          WHERE updated_at < ?1
+             OR NOT EXISTS (
+                 SELECT 1 FROM sync_peers p WHERE p.url = peer_battery.url
+             )",
+        [cutoff],
+    )? as u64;
+    Ok((peers_removed, batteries_removed))
+}
+
+/// Reclaim free SQLite pages occasionally when enough space has accumulated.
+/// VACUUM is intentionally thresholded and rate-limited because it rewrites
+/// the database and temporarily serializes writes.
+fn compact_if_needed(c: &Connection, now: i64) -> rusqlite::Result<bool> {
+    let last = LAST_COMPACT_AT.load(Ordering::Relaxed);
+    if now.saturating_sub(last) < COMPACT_INTERVAL_SECONDS {
+        return Ok(false);
+    }
+
+    let page_size: u64 = c.pragma_query_value(None, "page_size", |r| r.get(0))?;
+    let page_count: u64 = c.pragma_query_value(None, "page_count", |r| r.get(0))?;
+    let free_pages: u64 = c.pragma_query_value(None, "freelist_count", |r| r.get(0))?;
+    let file_bytes = page_size.saturating_mul(page_count);
+    let free_bytes = page_size.saturating_mul(free_pages);
+    if free_bytes < COMPACT_MIN_FREE_BYTES || free_bytes.saturating_mul(5) < file_bytes {
+        return Ok(false);
+    }
+
+    // Set the cooldown before starting so a failed/slow attempt is not retried
+    // on every five-minute reaper tick.
+    LAST_COMPACT_AT.store(now, Ordering::Relaxed);
+    tracing::info!(file_bytes, free_bytes, "compacting SQLite database");
+    c.execute_batch("VACUUM")?;
+    let _ = c.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)");
+    tracing::info!(free_bytes, "SQLite database compaction complete");
+    Ok(true)
+}
+
 /// Combined-budget admission for a write of `incoming` charged bytes
 /// (envelope plus any blobs it newly claims). Reclaims events first, then
 /// claimed blobs. Err(`at_watermark`) when the write cannot fit.
@@ -595,6 +662,15 @@ pub async fn reaper_tick(db: &Db, cfg: Config) {
                 if removed > 0 {
                     tracing::info!(removed, "removed stale upload temp files");
                 }
+                let (peers, batteries) = prune_stale_peers(conn, &cfg, now())?;
+                if peers > 0 || batteries > 0 {
+                    tracing::info!(peers, batteries, "pruned stale peer state");
+                }
+                match compact_if_needed(conn, now()) {
+                    Ok(true) => {}
+                    Ok(false) => {}
+                    Err(e) => tracing::warn!(error = %e, "SQLite database compaction failed"),
+                }
                 Ok::<(), rusqlite::Error>(())
             }))
         })
@@ -632,6 +708,76 @@ mod tests {
 
     fn test_cfg(dir: &std::path::Path) -> Config {
         Config::test_cfg(dir.to_path_buf(), 100)
+    }
+
+    #[test]
+    fn stale_peer_cleanup_preserves_configured_and_recent_peers() {
+        let dir = temp_dir("reaper-peer-cleanup");
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(crate::db::SCHEMA).unwrap();
+        let now = PEER_STATE_TTL_SECONDS + 10_000;
+        let cutoff = now - PEER_STATE_TTL_SECONDS;
+        let configured = "https://configured.example";
+        let stale = "peer:stale";
+        let recent = "peer:recent";
+        let orphan = "peer:orphan-battery";
+
+        for (url, last_seen) in [
+            (configured, cutoff - 1),
+            (stale, cutoff - 1),
+            (recent, cutoff + 1),
+        ] {
+            c.execute(
+                "INSERT INTO sync_peers (url, last_seen_at) VALUES (?1, ?2)",
+                rusqlite::params![url, last_seen],
+            )
+            .unwrap();
+        }
+        for (url, updated_at) in [
+            (configured, now),
+            (stale, now),
+            (recent, now),
+            (orphan, now),
+        ] {
+            c.execute(
+                "INSERT INTO peer_battery (url, remaining, max, updated_at)
+                 VALUES (?1, 1.0, 1.0, ?2)",
+                rusqlite::params![url, updated_at],
+            )
+            .unwrap();
+        }
+
+        let mut cfg = test_cfg(&dir);
+        cfg.sync_nodes = vec![configured.to_string()];
+        let (peers_removed, batteries_removed) = prune_stale_peers(&c, &cfg, now).unwrap();
+        assert_eq!(peers_removed, 1);
+        assert_eq!(batteries_removed, 2);
+
+        let peers: Vec<String> = {
+            let mut stmt = c
+                .prepare("SELECT url FROM sync_peers ORDER BY url")
+                .unwrap();
+            stmt.query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        assert_eq!(
+            peers,
+            vec![configured.to_string(), recent.to_string()],
+            "configured offline and recently active peers should remain"
+        );
+        let batteries: Vec<String> = {
+            let mut stmt = c
+                .prepare("SELECT url FROM peer_battery ORDER BY url")
+                .unwrap();
+            stmt.query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
+        assert_eq!(batteries, vec![configured.to_string(), recent.to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn seed_events(c: &Connection, count: u8, size: i64) {

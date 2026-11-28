@@ -149,6 +149,7 @@ impl Db {
         configure_connection(&c);
         c.pragma_update(None, "journal_mode", "WAL").ok();
         c.execute_batch(SCHEMA).expect("schema init failed");
+        ensure_peer_last_seen(&c).expect("peer activity schema migration failed");
         crate::store::blobs::reconcile_blob_expiry(&c).ok();
         reconcile_counters(&c);
 
@@ -322,6 +323,7 @@ CREATE TABLE IF NOT EXISTS sync_peers (
   penalty_at       INTEGER NOT NULL DEFAULT 0,
   strikes          INTEGER NOT NULL DEFAULT 0,
   next_poll_at     INTEGER NOT NULL DEFAULT 0,
+  last_seen_at     INTEGER NOT NULL DEFAULT 0,
   last_success_at  INTEGER,
   last_error       TEXT,
   last_error_at    INTEGER
@@ -349,6 +351,37 @@ CREATE TABLE IF NOT EXISTS sync_blob_queue (
   first_seen_at   INTEGER NOT NULL
 );
 "#;
+
+/// Add peer activity tracking to databases created by older versions, then
+/// seed it from the timestamps those versions already recorded.
+fn ensure_peer_last_seen(c: &Connection) -> rusqlite::Result<()> {
+    let has_last_seen = {
+        let mut stmt = c.prepare("PRAGMA table_info(sync_peers)")?;
+        let columns = stmt.query_map([], |r| r.get::<_, String>(1))?;
+        columns
+            .filter_map(Result::ok)
+            .any(|name| name == "last_seen_at")
+    };
+    if !has_last_seen {
+        c.execute(
+            "ALTER TABLE sync_peers
+             ADD COLUMN last_seen_at INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    c.execute(
+        "UPDATE sync_peers
+            SET last_seen_at = MAX(
+                COALESCE(last_success_at, 0),
+                COALESCE(last_error_at, 0),
+                COALESCE(penalty_at, 0),
+                COALESCE(next_poll_at, 0)
+            )
+          WHERE last_seen_at = 0",
+        [],
+    )?;
+    Ok(())
+}
 
 /// O(1) budget totals from the counters table (never SUM(size) on hot paths).
 /// Returns `(events, claimed blobs)`: the bytes charged to the single budget.
@@ -403,6 +436,42 @@ pub fn bump_counters(
 mod tests {
     use super::*;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn peer_last_seen_migration_adds_and_backfills_column() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE sync_peers (
+                url TEXT PRIMARY KEY,
+                penalty REAL NOT NULL DEFAULT 1.0,
+                penalty_at INTEGER NOT NULL DEFAULT 0,
+                strikes INTEGER NOT NULL DEFAULT 0,
+                next_poll_at INTEGER NOT NULL DEFAULT 0,
+                last_success_at INTEGER,
+                last_error TEXT,
+                last_error_at INTEGER
+            );
+            INSERT INTO sync_peers (url, penalty_at, next_poll_at, last_success_at)
+            VALUES ('https://old.example', 100, 200, 150);",
+        )
+        .unwrap();
+
+        ensure_peer_last_seen(&c).unwrap();
+        let seen: i64 = c
+            .query_row(
+                "SELECT last_seen_at FROM sync_peers WHERE url = 'https://old.example'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            seen, 200,
+            "migration should preserve the latest old timestamp"
+        );
+
+        // Re-running startup migration is harmless.
+        ensure_peer_last_seen(&c).unwrap();
+    }
 
     fn temp_dir(tag: &str) -> std::path::PathBuf {
         let nanos = SystemTime::now()
