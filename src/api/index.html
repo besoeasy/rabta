@@ -17,7 +17,7 @@
 <title>Rabta</title>
 <meta name="description" content="Rabta — The self-healing sync relay for local-first apps and peer meshes.">
 <meta name="application-name" content="Rabta">
-<meta name="theme-color" content="#eeeee9">
+<meta name="theme-color" content="#ffffff">
 <meta name="color-scheme" content="light">
 <meta property="og:title" content="Rabta">
 <meta property="og:description" content="The self-healing sync relay for local-first apps and peer meshes.">
@@ -203,16 +203,6 @@
   .board-picker input::-webkit-color-swatch { border: 1px solid var(--rule); border-radius: 0.4rem; }
   .board-picker input::-moz-color-swatch { border: 1px solid var(--rule); border-radius: 0.4rem; }
   .board-picker-hex { font: 0.72rem var(--mono); color: var(--mid); letter-spacing: 0.04em; text-transform: uppercase; font-variant-numeric: tabular-nums; }
-  .board-sizes { display: flex; gap: 0.35rem; }
-  .board-size {
-    display: grid; place-items: center; width: 1.6rem; height: 1.6rem;
-    border: 1px solid var(--rule); border-radius: 0.45rem; background: var(--paper); cursor: pointer;
-  }
-  .board-size span { display: block; border-radius: 50%; background: var(--ink); }
-  .board-size[data-size="4"] span { width: 3px; height: 3px; }
-  .board-size[data-size="10"] span { width: 7px; height: 7px; }
-  .board-size[data-size="22"] span { width: 11px; height: 11px; }
-  .board-size[aria-pressed="true"] { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
   .board-stats { white-space: nowrap; }
   .board-hint {
     position: fixed; left: 50%; top: 1rem; transform: translateX(-50%);
@@ -235,8 +225,8 @@
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
 
   /* Rabta relay console */
-  :root { --paper: #eeeee9; --ink: #111; --mid: #8b9086; --rule: #30342e; --green: #c6f36b; }
-  body { display: block; min-height: 100vh; padding: 0; background: var(--paper); }
+  :root { --paper: #fff; --ink: #111; --mid: #8b9086; --rule: #30342e; --green: #c6f36b; }
+  body { display: block; min-height: 100vh; padding: 0; background: #fff; font-size: clamp(14px, 1vw + 10px, 16px); }
   .page {
     width: 100%; max-width: 1200px; margin: 0 auto;
     padding: clamp(.65rem, 2vw, 1.5rem) clamp(.5rem, 2vw, 1.5rem) 1.5rem;
@@ -256,9 +246,9 @@
   .dash-canvas, .telemetry-panel, .eviction-panel, .events-panel { border: 1px solid #d9dbd3; }
   .dash-canvas { min-width: 0; background: #fff; padding: clamp(.65rem, 1.7vw, 1.1rem); }
   .section-head { display: flex; justify-content: space-between; align-items: end; gap: 1rem; margin-bottom: .65rem; }
-  .section-label { color: #8a8f84; font: .58rem var(--mono); letter-spacing: .12em; text-transform: uppercase; }
-  .section-title { margin-top: .15rem; font-size: 1.2rem; line-height: 1.1; font-weight: 750; letter-spacing: -.055em; }
-  .section-subtitle { margin-top: .25rem; color: #7c8177; font: .58rem var(--mono); letter-spacing: .04em; }
+  .section-label { color: #8a8f84; font: clamp(.52rem, .65vw, .62rem) var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+  .section-title { margin-top: .15rem; font-size: clamp(1.05rem, 1.5vw, 1.3rem); line-height: 1.1; font-weight: 750; letter-spacing: -.055em; }
+  .section-subtitle { margin-top: .25rem; color: #7c8177; font: clamp(.52rem, .65vw, .62rem) var(--mono); letter-spacing: .04em; }
   .live-pill { padding: .35rem .55rem; color: #526b35; background: #edf4e5; font: .54rem var(--mono); white-space: nowrap; }
   .board-frame {
     position: relative; width: 100%; height: clamp(280px, min(58vh, 48vw), 560px); min-height: 0;
@@ -283,19 +273,18 @@
     color: #555b50; font: .56rem var(--mono);
   }
   .board-controls, .board-colors, .board-zoom { display: inline-flex; align-items: center; gap: .3rem; }
+  .cell-tool-label { color: #6b7165; font: clamp(.48rem, .62vw, .56rem) var(--mono); letter-spacing: .04em; }
   .board-picker { padding: .1rem .35rem .1rem .1rem; border-radius: 0; gap: .3rem; }
   .board-picker input { width: 1.2rem; height: 1.2rem; }
   .board-picker-hex { font-size: .52rem; }
-  .board-sizes { gap: .2rem; }
-  .board-size, .zoom-button, .pan-button, .fit-button {
+  .zoom-button, .pan-button, .fit-button {
     width: 1.35rem; height: 1.35rem; border: 1px solid #d8dad3; border-radius: 0;
     color: #272a24; background: #fff; cursor: pointer; font: .7rem var(--mono);
   }
-  .board-size[aria-pressed="true"], .pan-button[aria-pressed="true"] { color: var(--green); background: #10130f; border-color: #10130f; box-shadow: none; }
-  .board-size span { background: currentColor; }
+  .pan-button[aria-pressed="true"] { color: var(--green); background: #10130f; border-color: #10130f; box-shadow: none; }
   .zoom-level { min-width: 3.1rem; text-align: center; font-variant-numeric: tabular-nums; }
   .board-stats { white-space: nowrap; font-variant-numeric: tabular-nums; }
-  .canvas-caption { display: flex; justify-content: space-between; gap: .5rem; margin-top: .45rem; color: #777; font: .52rem var(--mono); }
+  .canvas-caption { display: flex; justify-content: space-between; gap: .5rem; margin-top: .45rem; color: #777; font: clamp(.46rem, .58vw, .54rem) var(--mono); }
   .telemetry-panel, .events-panel { color: #f5f6f1; background: #070907; border-color: #070907; }
   .telemetry-panel { padding: .8rem 1.1rem .75rem; }
   .telemetry-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: .6rem; }
@@ -435,20 +424,16 @@
   </header>
   <section class="dash-section dash-canvas" aria-label="Shared canvas">
     <div class="section-head">
-      <div><span class="section-label">01 / Live canvas</span><h1 class="section-title">Shared canvas</h1><p class="section-subtitle">LIVE COLLABORATIVE SURFACE · SIGNED STROKES · 15 MIN TTL</p></div>
+      <div><span class="section-label">01 / Live canvas</span><h1 class="section-title">Shared canvas</h1><p class="section-subtitle">FILL ONE CELL PER TAP · SIGNED EVENTS · 15 MIN TTL</p></div>
       <span class="live-pill" id="canvas-live">● LIVE</span>
     </div>
     <div class="board-frame" id="board-frame">
-      <canvas id="board" role="img" aria-label="Shared 1000 by 1000 drawing grid. Draw with pointer; pan with move mode; zoom with wheel or controls."></canvas>
-      <p class="board-hint" id="board-hint">Loading signed strokes…</p>
+      <canvas id="board" role="img" aria-label="Shared 1000 by 1000 cell grid. Tap or click one square to fill it; pan with move mode; zoom with wheel or controls."></canvas>
+      <p class="board-hint" id="board-hint">Loading shared cells…</p>
       <div class="board-ui" role="toolbar" aria-label="Canvas controls">
         <div class="board-colors">
-          <label class="board-picker"><input type="color" id="board-color" value="#c56aef" aria-label="Stroke color"><span class="board-picker-hex" id="board-color-hex">C56AEF</span></label>
-          <div class="board-sizes" role="group" aria-label="Brush size">
-            <button class="board-size" data-size="4" type="button" aria-label="Small brush" aria-pressed="false"><span></span></button>
-            <button class="board-size" data-size="10" type="button" aria-label="Medium brush" aria-pressed="true"><span></span></button>
-            <button class="board-size" data-size="22" type="button" aria-label="Large brush" aria-pressed="false"><span></span></button>
-          </div>
+          <label class="board-picker"><input type="color" id="board-color" value="#c56aef" aria-label="Cell fill color"><span class="board-picker-hex" id="board-color-hex">C56AEF</span></label>
+          <span class="cell-tool-label">ONE CELL / TAP</span>
         </div>
         <div class="board-controls">
           <button class="pan-button" id="board-pan" type="button" aria-label="Toggle pan mode" aria-pressed="false" title="Pan the grid">✥</button>
@@ -459,10 +444,10 @@
             <button class="fit-button" id="zoom-fit" type="button" aria-label="Fit grid">FIT</button>
           </div>
         </div>
-        <span class="board-stats" id="board-stats">0 strokes · 0 painters</span>
+        <span class="board-stats" id="board-stats">0 filled cells · 0 painters</span>
       </div>
     </div>
-    <div class="canvas-caption"><span>GRID 1000 × 1000 · ZOOM OUT TO EXPLORE</span><span>SCROLL TO ZOOM · SELECT MOVE TO PAN</span></div>
+    <div class="canvas-caption"><span>1000 × 1000 CELLS · EACH FILL EXPIRES IN 15 MIN</span><span id="cell-coordinates">CELL X:— Y:—</span><span>ZOOM IN TO PICK A CELL · MOVE TO PAN</span></div>
   </section>
 
   <section class="dash-section telemetry-panel" aria-label="Node telemetry, identity and sync status">
@@ -741,33 +726,34 @@
     if (!ctx) return;
 
     const RELAY = '';
-    const COLLECTION = 'canvas/draw';
+    const COLLECTION = 'canvas/cells';
     const TTL = 900; // 15 minutes
-    const MAX_POINTS = 1200;
-    const MAX_PAGES = 1000;
+    const MAX_PAGES = 10000;
     const STORE_ID = 'rabta.canvas.identity.v1';
     const WORLD_SIZE = 1000;
+    const MAX_HISTORY_EVENTS = WORLD_SIZE * WORLD_SIZE;
     const MIN_ZOOM = 0.00001;
     const MAX_ZOOM = 128;
 
-    const strokes = [];
-    const owners = new Set();
+    const cells = new Map();
+    const cellRows = new Map();
+    const cellOwners = new Map();
     const seen = new Set();
-    const strokeKeys = new Set();
+    const seenExpiries = new Map();
     const pageEtags = new Map();
     const outbox = [];
     let posting = false;
     let color = '#c56aef';
-    let brush = 10;
-    let active = null;
-    let activePointer = null;
+    let pendingCell = null;
+    let pendingPointer = null;
+    let pointerMoved = false;
     let redrawQueued = false;
     let pollTimer = null;
     let pollBusy = false;
     let historyDone = false;
     let clockOffset = 0;
     let viewScale = 1, viewOx = 0, viewOy = 0, cameraScale = 1, pixelRatio = 1;
-    let zoom = 1, panX = 0, panY = 0, moveMode = false, activePan = null;
+    let zoom = 8, panX = 0, panY = 0, moveMode = false, activePan = null;
 
     const now = () => Math.floor(Date.now() / 1000) + clockOffset;
     const syncClock = (res) => {
@@ -828,65 +814,45 @@
     };
 
     const updateStats = () => {
-      statsEl.textContent = strokes.length + ' strokes · ' + owners.size + ' painters';
+      statsEl.textContent = cells.size.toLocaleString('en-US') + ' filled cells · ' + cellOwners.size + ' painters';
     };
     const updateHint = () => {
-      if (strokes.length) { hint.style.display = 'none'; return; }
       hint.style.display = 'flex';
       hint.textContent = !historyDone
-        ? 'Loading signed strokes…'
+        ? 'Loading shared cells…'
         : moveMode
-          ? 'Move mode — drag to pan; use wheel or buttons to zoom.'
+          ? 'Move mode — drag to pan; zoom in for precise cell selection.'
           : canSign
-            ? 'Drag to paint — every stroke is signed with your key.'
-            : 'Signing unavailable here — watching live strokes only.';
+            ? 'Click or tap one square to fill it. Zoom in for precision; each fill expires in 15 minutes.'
+            : 'Signing unavailable here — watching live cell events only.';
     };
 
-    const drawStroke = (stroke, preview) => {
-      if (!stroke || !stroke.points.length) return;
-      const pts = stroke.points;
-      ctx.save();
-      ctx.strokeStyle = stroke.color;
-      ctx.fillStyle = stroke.color;
-      ctx.lineWidth = stroke.width;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.globalAlpha = 0.96;
-      if (preview) {
-        ctx.shadowColor = stroke.color;
-        ctx.shadowBlur = Math.min(22, 4 + stroke.width * 1.4);
-      }
-      if (pts.length === 1) {
-        ctx.beginPath();
-        ctx.arc(pts[0][0], pts[0][1], Math.max(stroke.width / 2, 0.7), 0, Math.PI * 2);
-        ctx.fill();
-      } else {
-        ctx.beginPath();
-        ctx.moveTo(pts[0][0], pts[0][1]);
-        for (let i = 1; i < pts.length - 1; i++) {
-          const mx = (pts[i][0] + pts[i + 1][0]) / 2;
-          const my = (pts[i][1] + pts[i + 1][1]) / 2;
-          ctx.quadraticCurveTo(pts[i][0], pts[i][1], mx, my);
-        }
-        ctx.lineTo(pts[pts.length - 1][0], pts[pts.length - 1][1]);
-        ctx.stroke();
-      }
-      ctx.restore();
+    const decrementOwner = (owner) => {
+      const count = cellOwners.get(owner) || 0;
+      if (count <= 1) cellOwners.delete(owner);
+      else cellOwners.set(owner, count - 1);
     };
 
     const pruneExpired = () => {
       const t = now();
       let changed = false;
-      for (let i = strokes.length - 1; i >= 0; i--) {
-        if (strokes[i].expiresAt <= t) {
-          const s = strokes.splice(i, 1)[0];
-          strokeKeys.delete(s.sid ? s.owner + '|' + s.sid + '|' + s.seq : 'id:' + s.id);
+      for (const [key, cell] of cells) {
+        if (cell.expiresAt <= t) {
+          cells.delete(key);
+          const row = cellRows.get(cell.y);
+          row?.delete(cell.x);
+          if (row && !row.size) cellRows.delete(cell.y);
+          decrementOwner(cell.owner);
           changed = true;
         }
       }
+      for (const [id, expiresAt] of seenExpiries) {
+        if (expiresAt <= t) {
+          seen.delete(id);
+          seenExpiries.delete(id);
+        }
+      }
       if (changed) {
-        owners.clear();
-        for (let i = 0; i < strokes.length; i++) owners.add(strokes[i].owner);
         updateStats();
         updateHint();
       }
@@ -903,25 +869,38 @@
       ctx.setTransform(viewScale, 0, 0, viewScale, viewOx, viewOy);
       ctx.fillStyle = '#fff';
       ctx.fillRect(0, 0, WORLD_SIZE, WORLD_SIZE);
-      ctx.strokeStyle = '#edf0e9';
+      const visibleLeft = clampN(Math.floor(-viewOx / viewScale) - 1, 0, WORLD_SIZE - 1);
+      const visibleRight = clampN(Math.ceil((canvasEl.width - viewOx) / viewScale) + 1, 1, WORLD_SIZE);
+      const visibleTop = clampN(Math.floor(-viewOy / viewScale) - 1, 0, WORLD_SIZE - 1);
+      const visibleBottom = clampN(Math.ceil((canvasEl.height - viewOy) / viewScale) + 1, 1, WORLD_SIZE);
+      for (let y = visibleTop; y < visibleBottom; y++) {
+        const row = cellRows.get(y);
+        if (!row) continue;
+        for (const [x, cell] of row) {
+          if (x < visibleLeft || x >= visibleRight) continue;
+          ctx.fillStyle = cell.color;
+          ctx.fillRect(x, y, 1, 1);
+        }
+      }
+
+      const gridStep = cameraScale >= 1.2 ? 1 : cameraScale >= 0.2 ? 10 : 50;
+      ctx.strokeStyle = gridStep === 1 ? 'rgba(35,40,32,.22)' : '#e7eae4';
       ctx.lineWidth = 1 / Math.max(viewScale, 0.0001);
       ctx.beginPath();
-      for (let tick = 0; tick <= WORLD_SIZE; tick += 50) {
+      for (let tick = 0; tick <= WORLD_SIZE; tick += gridStep) {
         ctx.moveTo(tick, 0);
         ctx.lineTo(tick, WORLD_SIZE);
         ctx.moveTo(0, tick);
         ctx.lineTo(WORLD_SIZE, tick);
       }
       ctx.stroke();
+
       ctx.strokeStyle = '#687063';
       ctx.lineWidth = 2 / Math.max(viewScale, 0.0001);
-      ctx.strokeRect(0, 0, WORLD_SIZE, WORLD_SIZE);
       ctx.beginPath();
       ctx.moveTo(0, 0); ctx.lineTo(WORLD_SIZE, 0);
       ctx.moveTo(0, 0); ctx.lineTo(0, WORLD_SIZE);
       ctx.stroke();
-      for (let i = 0; i < strokes.length; i++) drawStroke(strokes[i], false);
-      if (active) drawStroke(active, true);
       ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
       ctx.fillStyle = '#73786e';
       ctx.font = '10px ui-monospace, monospace';
@@ -982,28 +961,10 @@
       resize();
     };
 
-    const addStroke = (stroke) => {
-      if (!stroke) return false;
-      const key = stroke.sid ? stroke.owner + '|' + stroke.sid + '|' + stroke.seq : 'id:' + stroke.id;
-      if (strokeKeys.has(key)) return false;
-      strokeKeys.add(key);
-      if (stroke.id) seen.add(stroke.id);
-      owners.add(stroke.owner);
-      strokes.push(stroke);
-      while (strokes.length > 500) strokes.shift();
-      updateStats();
-      updateHint();
-      scheduleRedraw();
-      return true;
-    };
-
     const compareEvents = (a, b) => {
-      const ta = Number(a.created_at) || 0;
-      const tb = Number(b.created_at) || 0;
+      const ta = Number(a.created_at ?? a.at) || 0;
+      const tb = Number(b.created_at ?? b.at) || 0;
       if (ta !== tb) return ta - tb;
-      const da = a.data || {};
-      const db = b.data || {};
-      if (da.sid && da.sid === db.sid) return (Number(da.seq) || 0) - (Number(db.seq) || 0);
       const ia = String(a.id || '');
       const ib = String(b.id || '');
       return ia < ib ? -1 : ia > ib ? 1 : 0;
@@ -1012,32 +973,51 @@
     const parseEvent = (event) => {
       if (!event || typeof event !== 'object' || typeof event.id !== 'string') return null;
       const data = event.data;
-      if (!data || data.v !== 1 || typeof data.color !== 'string' || !Array.isArray(data.p)) return null;
-      if (data.p.length < 2 || data.p.length > MAX_POINTS * 2 || data.p.length % 2 !== 0) return null;
-      if (!/^#[0-9a-f]{6}$/i.test(data.color)) return null;
-      const w = Number(data.w);
-      if (!Number.isFinite(w)) return null;
+      if (!data || data.v !== 1 || typeof data.color !== 'string' || !/^#[0-9a-f]{6}$/i.test(data.color)) return null;
+      if (!Number.isInteger(data.x) || !Number.isInteger(data.y)
+          || data.x < 0 || data.x >= WORLD_SIZE || data.y < 0 || data.y >= WORLD_SIZE) return null;
+      if (typeof data.nonce !== 'string' || !/^[0-9a-f]{16}$/i.test(data.nonce)) return null;
       const owner = typeof event.owner === 'string' ? event.owner.toLowerCase() : '';
       if (!/^ed25519:[0-9a-f]{64}$/.test(owner)) return null;
-      const points = [];
-      for (let i = 0; i < data.p.length; i += 2) {
-        const x = Number(data.p[i]);
-        const y = Number(data.p[i + 1]);
-        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-        points.push([clampN(Math.round(x), 0, 1000), clampN(Math.round(y), 0, 1000)]);
-      }
-      const sid = typeof data.sid === 'string' && /^[0-9a-f]{1,64}$/i.test(data.sid) ? data.sid.toLowerCase() : '';
-      const seq = Number.isInteger(data.seq) && data.seq >= 0 && data.seq < 100000 ? data.seq : 0;
       const at = Number.isFinite(event.created_at) ? event.created_at : now();
       const expiresAt = Number.isFinite(event.expires_at) ? event.expires_at : at + TTL;
-      return { id: event.id, owner, color: data.color.toLowerCase(), width: clampN(Math.round(w), 1, 48), points, sid, seq, at, expiresAt };
+      if (expiresAt <= now()) return null;
+      return {
+        id: event.id,
+        owner,
+        color: data.color.toLowerCase(),
+        x: data.x,
+        y: data.y,
+        at,
+        expiresAt,
+      };
+    };
+
+    const addCell = (cell) => {
+      if (!cell || seen.has(cell.id)) return false;
+      seen.add(cell.id);
+      seenExpiries.set(cell.id, cell.expiresAt);
+      const key = `${cell.x},${cell.y}`;
+      const previous = cells.get(key);
+      if (previous && compareEvents(previous, cell) >= 0) return false;
+      if (previous) decrementOwner(previous.owner);
+      cells.set(key, cell);
+      let row = cellRows.get(cell.y);
+      if (!row) { row = new Map(); cellRows.set(cell.y, row); }
+      row.set(cell.x, cell);
+      cellOwners.set(cell.owner, (cellOwners.get(cell.owner) || 0) + 1);
+      return true;
     };
 
     const addEvent = (event) => {
       if (!event || typeof event.id !== 'string' || seen.has(event.id)) return false;
-      const stroke = parseEvent(event);
-      if (!stroke) { seen.add(event.id); return false; }
-      return addStroke(stroke);
+      const cell = parseEvent(event);
+      if (!cell) {
+        seen.add(event.id);
+        seenExpiries.set(event.id, Number(event.expires_at) || now() + TTL);
+        return false;
+      }
+      return addCell(cell);
     };
 
     const fetchPage = async (cursor) => {
@@ -1064,27 +1044,28 @@
     };
 
     const loadHistory = async () => {
-      const collected = [];
       let cursor = null;
       let pages = 0;
+      let loaded = 0;
       try {
         do {
           const body = await fetchPage(cursor);
           const pageEvents = Array.isArray(body.events) ? body.events : [];
-          collected.push(...pageEvents);
+          for (const event of pageEvents) addEvent(event);
+          loaded += pageEvents.length;
           cursor = body.next_cursor || null;
           pages += 1;
           const last = pageEvents[pageEvents.length - 1];
           const lastExp = last
             ? (Number.isFinite(Number(last.expires_at)) ? Number(last.expires_at) : (Number(last.created_at) || 0) + TTL)
             : 0;
-          if (!cursor || pages >= MAX_PAGES || collected.length >= 4500 || (pageEvents.length > 0 && lastExp <= now())) break;
+          if (!cursor || pages >= MAX_PAGES || loaded >= MAX_HISTORY_EVENTS || (pageEvents.length > 0 && lastExp <= now())) break;
         } while (true);
-        collected.sort(compareEvents);
-        for (const event of collected) addEvent(event);
       } catch {}
       historyDone = true;
+      updateStats();
       updateHint();
+      scheduleRedraw();
     };
 
     const poll = async () => {
@@ -1093,20 +1074,23 @@
       if (pollBusy) { pollTimer = setTimeout(poll, 1000); return; }
       pollBusy = true;
       try {
-        const collected = [];
         let cursor = null;
         let pages = 0;
         let unseen = true;
+        let changed = false;
         do {
           const body = await fetchPage(cursor);
           const events = Array.isArray(body.events) ? body.events : [];
-          collected.push(...events);
           unseen = events.some((event) => event && typeof event.id === 'string' && !seen.has(event.id));
+          for (const event of events) changed = addEvent(event) || changed;
           cursor = unseen ? (body.next_cursor || null) : null;
           pages += 1;
         } while (cursor && pages < 3);
-        collected.sort(compareEvents);
-        for (const event of collected) addEvent(event);
+        if (changed) {
+          updateStats();
+          updateHint();
+          scheduleRedraw();
+        }
       } catch {}
       pollBusy = false;
       pollTimer = setTimeout(poll, 2000);
@@ -1164,7 +1148,7 @@
         created_at: createdAt,
         expires_at: createdAt + TTL,
         owner: identity.owner,
-        labels: ['stroke'],
+        labels: ['cell'],
         blobs: [],
         data
       };
@@ -1200,33 +1184,44 @@
       if (outbox.length) setTimeout(drain, 1500);
     };
 
-    const commitStroke = async (finished) => {
-      if (!finished || !finished.points.length) return;
+    const fillCell = async (x, y) => {
       const at = now() - 1;
-      const sid = randomHex(8);
-      const chunks = [];
-      for (let start = 0; start < finished.points.length;) {
-        const end = Math.min(start + MAX_POINTS, finished.points.length);
-        chunks.push(finished.points.slice(start, end));
-        if (end >= finished.points.length) break;
-        start = end - 1;
-      }
-      for (let seq = 0; seq < chunks.length; seq++) {
-        const points = chunks[seq].map((p) => [clampN(Math.round(p[0]), 0, 1000), clampN(Math.round(p[1]), 0, 1000)]);
-        addStroke({ id: 'local:' + sid + ':' + seq, owner: loadIdentity().owner, color: finished.color, width: finished.width, points, sid, seq, at });
-        try {
-          const envelope = await buildEnvelope({ v: 1, sid, seq, color: finished.color, w: finished.width, p: points.flat() }, at);
-          outbox.push({ envelope, attempts: 0 });
-          drain();
-        } catch {}
-      }
+      const nonce = randomHex(16);
+      try {
+        const envelope = await buildEnvelope({ v: 1, x, y, color, nonce }, at);
+        const changed = addCell({
+          id: envelope.id,
+          owner: envelope.owner,
+          x,
+          y,
+          color,
+          at,
+          expiresAt: envelope.expires_at,
+        });
+        if (changed) {
+          updateStats();
+          updateHint();
+          scheduleRedraw();
+        }
+        outbox.push({ envelope, attempts: 0 });
+        drain();
+      } catch {}
     };
 
-    const canvasPoint = (event, keepInside = true) => {
+    const canvasPoint = (event) => {
       const rect = frame.getBoundingClientRect();
       const x = (event.clientX - rect.left - ((rect.width - WORLD_SIZE * cameraScale) / 2 + panX)) / cameraScale;
       const y = (event.clientY - rect.top - ((rect.height - WORLD_SIZE * cameraScale) / 2 + panY)) / cameraScale;
-      return keepInside ? [clampN(x, 0, WORLD_SIZE), clampN(y, 0, WORLD_SIZE)] : [x, y];
+      return [x, y];
+    };
+    const cellAt = (event) => {
+      const [x, y] = canvasPoint(event);
+      if (x < 0 || x >= WORLD_SIZE || y < 0 || y >= WORLD_SIZE) return null;
+      return { x: Math.floor(x), y: Math.floor(y) };
+    };
+    const showCellCoordinates = (cell) => {
+      const coordinates = $('cell-coordinates');
+      if (coordinates) coordinates.textContent = cell ? `CELL X:${cell.x} Y:${cell.y}` : 'CELL X:— Y:—';
     };
 
     canvasEl.addEventListener('wheel', (event) => {
@@ -1241,14 +1236,15 @@
         event.preventDefault();
         return;
       }
-      if (!canSign || active) return;
+      if (!canSign || pendingCell) return;
       if (event.pointerType === 'mouse' && event.button !== 0) return;
-      const point = canvasPoint(event, false);
-      if (point[0] < 0 || point[0] > WORLD_SIZE || point[1] < 0 || point[1] > WORLD_SIZE) return;
-      activePointer = event.pointerId;
+      const cell = cellAt(event);
+      if (!cell) return;
+      showCellCoordinates(cell);
+      pendingCell = { ...cell, startX: event.clientX, startY: event.clientY };
+      pendingPointer = event.pointerId;
+      pointerMoved = false;
       try { canvasEl.setPointerCapture(event.pointerId); } catch {}
-      active = { color, width: brush, points: [point] };
-      scheduleRedraw();
     });
     canvasEl.addEventListener('pointermove', (event) => {
       if (activePan && event.pointerId === activePan.pointerId) {
@@ -1257,31 +1253,38 @@
         resize();
         return;
       }
-      if (!active || event.pointerId !== activePointer) return;
-      const p = canvasPoint(event);
-      const last = active.points[active.points.length - 1];
-      const dx = p[0] - last[0];
-      const dy = p[1] - last[1];
-      if (dx * dx + dy * dy < 4) return;
-      active.points.push(p);
-      scheduleRedraw();
+      if (!pendingCell || event.pointerId !== pendingPointer) {
+        showCellCoordinates(cellAt(event));
+        return;
+      }
+      const dx = event.clientX - pendingCell.startX;
+      const dy = event.clientY - pendingCell.startY;
+      if (dx * dx + dy * dy > 36) pointerMoved = true;
     });
-    const finishStroke = (event) => {
-      if (!active || event.pointerId !== activePointer) return;
-      const finished = active;
-      active = null;
-      activePointer = null;
+    const finishCell = (event) => {
+      if (!pendingCell || event.pointerId !== pendingPointer) return;
+      const selected = pendingCell;
+      const shouldFill = !pointerMoved;
+      pendingCell = null;
+      pendingPointer = null;
+      pointerMoved = false;
       try { canvasEl.releasePointerCapture(event.pointerId); } catch {}
-      if (finished.points.length) commitStroke(finished);
-      else scheduleRedraw();
+      if (shouldFill) fillCell(selected.x, selected.y);
+    };
+    const cancelCell = (event) => {
+      if (!pendingCell || event.pointerId !== pendingPointer) return;
+      pendingCell = null;
+      pendingPointer = null;
+      pointerMoved = false;
+      try { canvasEl.releasePointerCapture(event.pointerId); } catch {}
     };
     const finishPan = (event) => {
       if (!activePan || event.pointerId !== activePan.pointerId) return;
       activePan = null;
       try { canvasEl.releasePointerCapture(event.pointerId); } catch {}
     };
-    canvasEl.addEventListener('pointerup', finishStroke);
-    canvasEl.addEventListener('pointercancel', finishStroke);
+    canvasEl.addEventListener('pointerup', finishCell);
+    canvasEl.addEventListener('pointercancel', cancelCell);
     canvasEl.addEventListener('pointerup', finishPan);
     canvasEl.addEventListener('pointercancel', finishPan);
 
@@ -1293,8 +1296,7 @@
       moveMode = !moveMode;
       panButton.setAttribute('aria-pressed', String(moveMode));
       frame.classList.toggle('pan-mode', moveMode);
-      hint.textContent = moveMode ? 'Move mode — drag to pan the grid.' : 'Draw mode — drag to add a signed stroke.';
-      if (strokes.length) hint.style.display = 'none';
+      updateHint();
     });
 
     const picker = $('board-color');
@@ -1307,13 +1309,6 @@
         if (hexEl) hexEl.textContent = color.replace('#', '').toUpperCase();
       });
     }
-    document.querySelectorAll('.board-size').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        brush = Number(btn.dataset.size) || 10;
-        document.querySelectorAll('.board-size').forEach((el) => el.setAttribute('aria-pressed', el === btn ? 'true' : 'false'));
-      });
-    });
-
     resize();
     window.addEventListener('resize', resize);
     if (window.ResizeObserver) new ResizeObserver(resize).observe(frame);

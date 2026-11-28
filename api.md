@@ -280,7 +280,7 @@ Rabta routes are organized into four functional **categories** and classified by
 
 #### `GET /`
 
-Serves a self-contained HTML dashboard (no CDN, no fonts, no external assets). It provides a 1,000 × 1,000 collaborative drawing grid whose signed strokes expire after 15 minutes, plus node telemetry, sync battery and peer status, the largest eligible pressure-eviction candidate, and a recent-event table. Node telemetry refreshes every 5 seconds; event listings use ETags. The machine-readable route index is at `GET /api/v1/` (both `/api/v1` and `/api/v1/` work).
+Serves a self-contained HTML dashboard (no CDN, no fonts, no external assets). It provides a 1,000 × 1,000 collaborative cell grid where each tap fills exactly one square with a signed event that expires after 15 minutes, plus node telemetry, sync battery and peer status, the largest eligible pressure-eviction candidate, and a recent-event table. Node telemetry refreshes every 5 seconds; event listings use ETags. The machine-readable route index is at `GET /api/v1/` (both `/api/v1` and `/api/v1/` work).
 
 #### `GET /api/v1/`
 
