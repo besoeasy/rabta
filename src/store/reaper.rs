@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 use crate::config::Config;
 use crate::db::Db;
@@ -190,7 +190,7 @@ pub fn event_victims(c: &Connection, cfg: &Config) -> rusqlite::Result<Vec<Event
 
 /// Snapshot of what pressure eviction could reclaim right now, without
 /// building the full victim list. Used by `/api/v1/node` and operator diagnostics.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EvictionSummary {
     /// Live events that may be evicted (policy-exempt records excluded).
     pub candidates: i64,
@@ -200,6 +200,17 @@ pub struct EvictionSummary {
     pub blob_bytes: i64,
     /// Footprint of the single largest candidate, in charged bytes.
     pub largest_footprint: i64,
+    /// Metadata for the candidate that pressure eviction would try first.
+    pub largest_event: Option<LargestEventCandidate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LargestEventCandidate {
+    pub id: String,
+    pub collection: String,
+    pub envelope_bytes: i64,
+    pub blob_bytes: i64,
+    pub reclaimable_bytes: i64,
 }
 
 impl EvictionSummary {
@@ -243,12 +254,54 @@ pub fn eviction_summary(c: &Connection, cfg: &Config) -> rusqlite::Result<Evicti
                 r.get::<_, i64>(3)?,
             ))
         })?;
+    let largest_event = largest_event_candidate(c, cfg)?;
     Ok(EvictionSummary {
         candidates,
         envelope_bytes,
         blob_bytes: footprint_bytes.saturating_sub(envelope_bytes),
         largest_footprint,
+        largest_event,
     })
+}
+
+/// Return the first event pressure eviction would consider, with the same
+/// footprint and deterministic tie-breaking as `event_victims`.
+fn largest_event_candidate(
+    c: &Connection,
+    cfg: &Config,
+) -> rusqlite::Result<Option<LargestEventCandidate>> {
+    let sql = format!(
+        "WITH victims AS (
+             SELECT e.id, e.collection, e.size AS envelope_bytes, e.created_at,
+                    {} AS blob_bytes
+               FROM events e{}
+         )
+         SELECT lower(hex(id)), collection, envelope_bytes, blob_bytes,
+                envelope_bytes + blob_bytes
+           FROM victims
+          ORDER BY envelope_bytes + blob_bytes DESC, created_at ASC, id ASC
+          LIMIT 1",
+        SOLE_CLAIMED_BLOB_BYTES,
+        cfg.policy
+            .exclusion_where("e")
+            .map(|(w, _)| format!(" {w}"))
+            .unwrap_or_default()
+    );
+    let params: Vec<rusqlite::types::Value> = cfg
+        .policy
+        .rule_clause("e", false, 1)
+        .map(|(_, p)| p)
+        .unwrap_or_default();
+    c.query_row(&sql, rusqlite::params_from_iter(params.iter()), |r| {
+        Ok(LargestEventCandidate {
+            id: r.get(0)?,
+            collection: r.get(1)?,
+            envelope_bytes: r.get(2)?,
+            blob_bytes: r.get(3)?,
+            reclaimable_bytes: r.get(4)?,
+        })
+    })
+    .optional()
 }
 
 /// Delete live events one at a time, largest total footprint first, until
@@ -1093,6 +1146,16 @@ mod tests {
         assert_eq!(summary.blob_bytes, 100);
         assert_eq!(summary.reclaimable_bytes(), 130);
         assert_eq!(summary.largest_footprint, 110);
+        assert_eq!(
+            summary.largest_event,
+            Some(LargestEventCandidate {
+                id: hex::encode([1u8; 32]),
+                collection: "c".into(),
+                envelope_bytes: 10,
+                blob_bytes: 100,
+                reclaimable_bytes: 110,
+            })
+        );
 
         drop(db);
         let _ = std::fs::remove_dir_all(&dir);

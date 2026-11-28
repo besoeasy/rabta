@@ -1070,7 +1070,8 @@ pub fn spec() -> Value {
                         "envelope_bytes",
                         "blob_bytes",
                         "reclaimable_bytes",
-                        "largest_bytes"
+                        "largest_bytes",
+                        "largest_event"
                     ],
                     "properties": {
                         "events": {
@@ -1099,6 +1100,30 @@ pub fn spec() -> Value {
                             "type": "integer",
                             "format": "int64",
                             "minimum": 0
+                        },
+                        "largest_event": {
+                            "oneOf": [
+                                {
+                                    "type": "object",
+                                    "required": [
+                                        "id",
+                                        "collection",
+                                        "envelope_bytes",
+                                        "blob_bytes",
+                                        "reclaimable_bytes"
+                                    ],
+                                    "properties": {
+                                        "id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                                        "collection": { "type": "string" },
+                                        "envelope_bytes": { "type": "integer", "format": "int64", "minimum": 0 },
+                                        "blob_bytes": { "type": "integer", "format": "int64", "minimum": 0 },
+                                        "reclaimable_bytes": { "type": "integer", "format": "int64", "minimum": 0 }
+                                    },
+                                    "additionalProperties": false
+                                },
+                                { "type": "null" }
+                            ],
+                            "description": "The first eligible event pressure eviction would consider, or null if no candidate exists."
                         }
                     },
                     "additionalProperties": false

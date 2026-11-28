@@ -280,7 +280,7 @@ Rabta routes are organized into four functional **categories** and classified by
 
 #### `GET /`
 
-Serves only a self-contained HTML status page (no CDN, no fonts, no external assets) centred on the viewport. The page polls `/api/v1/node` every 5 seconds and shows live events, live blobs, per-node sync batteries, store usage, and version. The machine-readable route index is at `GET /api/v1/` (both `/api/v1` and `/api/v1/` work).
+Serves a self-contained HTML dashboard (no CDN, no fonts, no external assets). It provides a 1,000 × 1,000 collaborative drawing grid whose signed strokes expire after 15 minutes, plus node telemetry, sync battery and peer status, the largest eligible pressure-eviction candidate, and a recent-event table. Node telemetry refreshes every 5 seconds; event listings use ETags. The machine-readable route index is at `GET /api/v1/` (both `/api/v1` and `/api/v1/` work).
 
 #### `GET /api/v1/`
 
@@ -398,7 +398,14 @@ Unified endpoint for node identity, runtime telemetry, storage, and peer health.
       "envelope_bytes": 2185,
       "blob_bytes": 1048576,
       "reclaimable_bytes": 1050761,
-      "largest_bytes": 1048596
+      "largest_bytes": 1048596,
+      "largest_event": {
+        "id": "<64 lowercase hex>",
+        "collection": "media/archive",
+        "envelope_bytes": 20,
+        "blob_bytes": 1048576,
+        "reclaimable_bytes": 1048596
+      }
     }
   },
   "upload": {
@@ -434,6 +441,8 @@ Unified endpoint for node identity, runtime telemetry, storage, and peer health.
 - `donate` is the operator's optional on-chain donation address from `BITCOIN` (`null` when unset). Display-only: never part of events or signatures.
 - `sync` lists configured peer node URLs in configured order.
 - Telemetry blocks (`events`, `blobs`, `storage`, `reaper`, `eviction`, `upload`, `peers`) report live database and peer metrics.
+
+`eviction.candidates.largest_event` identifies the first eligible event pressure eviction would consider. Its `reclaimable_bytes` is the envelope plus blobs exclusively claimed by that event; shared blobs are excluded. It is `null` when there are no candidates. Pressure eviction only runs when required by storage pressure, and policy-protected events are excluded.
 
 The `storage` block is the one to read when a write is refused:
 

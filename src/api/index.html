@@ -17,7 +17,7 @@
 <title>Rabta</title>
 <meta name="description" content="Rabta — The self-healing sync relay for local-first apps and peer meshes.">
 <meta name="application-name" content="Rabta">
-<meta name="theme-color" content="#ffffff">
+<meta name="theme-color" content="#eeeee9">
 <meta name="color-scheme" content="light">
 <meta property="og:title" content="Rabta">
 <meta property="og:description" content="The self-healing sync relay for local-first apps and peer meshes.">
@@ -233,106 +233,239 @@
     .node .meter { grid-column: 2 / 4; }
   }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
+
+  /* Rabta relay console */
+  :root { --paper: #eeeee9; --ink: #111; --mid: #8b9086; --rule: #30342e; --green: #c6f36b; }
+  body { display: block; min-height: 100vh; padding: 0; background: var(--paper); }
+  .page {
+    max-width: 940px; margin: 0 auto; padding: 1.1rem 1.4rem 1.5rem;
+    background: transparent; border-radius: 0; box-shadow: none; pointer-events: auto;
+  }
+  .page a, .page button, .page input, .page label, .page code { pointer-events: auto; }
+  .dash-header { align-items: center; border-bottom: 1px solid #c9cbc2; padding-bottom: .7rem; }
+  .dash-brand { display: inline-flex; align-items: center; gap: .65rem; font-size: 1.35rem; letter-spacing: -.06em; }
+  .brand-mark { width: 17px; height: 17px; border: 2px solid var(--ink); transform: rotate(45deg); position: relative; }
+  .brand-mark::after { content: ""; position: absolute; width: 5px; height: 5px; top: 4px; left: 4px; background: var(--ink); border-radius: 50%; }
+  .dash-kicker { font: .58rem var(--mono); font-weight: 500; color: #777; letter-spacing: .08em; }
+  .links { align-items: center; font: .62rem var(--mono); gap: 1rem; }
+  .online { display: inline-flex; align-items: center; gap: .4rem; color: var(--ink); }
+  .online i { width: 7px; height: 7px; border-radius: 50%; background: #72a934; box-shadow: 0 0 0 3px #d8e7c4; }
+  .links a { color: var(--ink); }
+  .dash-section { margin-top: .7rem; }
+  .dash-canvas, .telemetry-panel, .eviction-panel, .events-panel { border: 1px solid #d9dbd3; }
+  .dash-canvas { background: #fff; padding: .9rem 1rem .7rem; }
+  .section-head { display: flex; justify-content: space-between; align-items: end; gap: 1rem; margin-bottom: .65rem; }
+  .section-label { color: #8a8f84; font: .58rem var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+  .section-title { margin-top: .15rem; font-size: 1.2rem; line-height: 1.1; font-weight: 750; letter-spacing: -.055em; }
+  .section-subtitle { margin-top: .25rem; color: #7c8177; font: .58rem var(--mono); letter-spacing: .04em; }
+  .live-pill { padding: .35rem .55rem; color: #526b35; background: #edf4e5; font: .54rem var(--mono); white-space: nowrap; }
+  .board-frame {
+    position: relative; width: 100%; height: min(58vh, 440px); min-height: 320px;
+    overflow: hidden; border: 1px solid #e6e8e1; background: #fff; touch-action: none;
+  }
+  .board-frame #board {
+    position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1;
+    display: block !important; cursor: crosshair; touch-action: none; background: transparent;
+  }
+  .board-frame.pan-mode #board { cursor: grab; }
+  .board-frame.pan-mode #board:active { cursor: grabbing; }
+  .board-hint {
+    position: absolute; z-index: 2; inset: auto auto 2.9rem .65rem; transform: none;
+    margin: 0; padding: .35rem .5rem; border-radius: 0; background: rgba(255,255,255,.88);
+    border: 1px solid #e6e8e1; color: #656a60; font: .56rem var(--mono);
+  }
+  .board-frame .board-ui {
+    position: absolute; left: .55rem; right: .55rem; bottom: .55rem; transform: none; z-index: 3;
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .4rem;
+    padding: .4rem .5rem; border: 1px solid #e0e2db; border-radius: 0;
+    background: rgba(255,255,255,.95); box-shadow: 0 2px 12px rgba(0,0,0,.08);
+    color: #555b50; font: .56rem var(--mono);
+  }
+  .board-controls, .board-colors, .board-zoom { display: inline-flex; align-items: center; gap: .3rem; }
+  .board-picker { padding: .1rem .35rem .1rem .1rem; border-radius: 0; gap: .3rem; }
+  .board-picker input { width: 1.2rem; height: 1.2rem; }
+  .board-picker-hex { font-size: .52rem; }
+  .board-sizes { gap: .2rem; }
+  .board-size, .zoom-button, .pan-button, .fit-button {
+    width: 1.35rem; height: 1.35rem; border: 1px solid #d8dad3; border-radius: 0;
+    color: #272a24; background: #fff; cursor: pointer; font: .7rem var(--mono);
+  }
+  .board-size[aria-pressed="true"], .pan-button[aria-pressed="true"] { color: var(--green); background: #10130f; border-color: #10130f; box-shadow: none; }
+  .board-size span { background: currentColor; }
+  .zoom-level { min-width: 3.1rem; text-align: center; font-variant-numeric: tabular-nums; }
+  .board-stats { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .canvas-caption { display: flex; justify-content: space-between; gap: .5rem; margin-top: .45rem; color: #777; font: .52rem var(--mono); }
+  .telemetry-panel, .events-panel { color: #f5f6f1; background: #070907; border-color: #070907; }
+  .telemetry-panel { padding: .8rem 1.1rem .75rem; }
+  .telemetry-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: .6rem; }
+  .telemetry-head .section-label { color: #a3a89e; }
+  .telemetry-stamp { color: #8d9388; font: .52rem var(--mono); }
+  .telemetry-stamp i { display: inline-block; width: 6px; height: 6px; margin-right: .3rem; border-radius: 50%; background: var(--green); }
+  .dash-metrics { display: grid; grid-template-columns: 1fr 1fr 1.2fr; border-top: 1px solid #30342e; border-bottom: 1px solid #30342e; }
+  .dash-metric { display: grid; grid-template-columns: 1.5rem minmax(0,1fr); gap: .35rem .55rem; align-content: center; min-width: 0; padding: .65rem .8rem .6rem 0; }
+  .dash-metric + .dash-metric { padding-left: .8rem; border-left: 1px solid #30342e; }
+  .dash-metric svg { width: 1.25rem; height: 1.25rem; grid-row: span 2; margin-top: .1rem; stroke: var(--green); fill: none; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+  .dash-metric label { color: #a3a89e; font: .52rem var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+  .dash-metric strong { font-size: 1.45rem; line-height: 1.05; letter-spacing: -.06em; font-weight: 650; }
+  .dash-metric small { grid-column: 2; color: #999e94; font: .5rem var(--mono); }
+  .dash-storage-bar { grid-column: 2; height: 4px; display: flex; background: #33372f; margin-top: .15rem; }
+  .dash-storage-bar i { display: block; height: 100%; transition: width .4s ease; }
+  .dash-storage-bar .c-events { background: #fff; }
+  .dash-storage-bar .c-claimed { background: var(--green); }
+  .dash-storage-bar .c-unclaimed { background: #70766a; }
+  .storage-details { grid-column: 2; display: flex; justify-content: space-between; gap: .4rem; color: #999e94; font: .46rem var(--mono); }
+  .storage-details b { color: #fff; font-weight: 500; }
+  .storage-limit { color: var(--green); }
+  .dash-legend { display: flex; flex-wrap: wrap; gap: .5rem 1rem; margin-top: .4rem; color: #aaa; font: .48rem var(--mono); }
+  .dash-legend span { display: inline-flex; gap: .3rem; align-items: center; }
+  .dash-legend i { width: 6px; height: 6px; background: #fff; }
+  .dash-legend .claimed i { background: var(--green); }
+  .dash-legend .unclaimed i { background: #70766a; }
+  .dash-legend b { color: #f5f6f1; font-weight: 500; }
+  .dash-details { display: grid; grid-template-columns: 1.2fr 1fr 1fr; align-items: center; margin-top: .65rem; }
+  .dash-detail { display: flex; align-items: center; gap: .55rem; min-width: 0; padding-right: .75rem; }
+  .dash-detail + .dash-detail { padding-left: .75rem; border-left: 1px solid #30342e; }
+  .detail-icon { width: 1.5rem; height: 1.5rem; flex: none; stroke: var(--green); fill: none; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
+  .detail-copy { min-width: 0; }
+  .detail-label { margin-bottom: .2rem; color: #a3a89e; font: .48rem var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+  .detail-value { color: #f5f6f1; font: .52rem var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .copy-button { padding: 0 .2rem; border: 0; color: #a3a89e; background: none; cursor: pointer; font: .55rem var(--mono); }
+  .detail-battery { width: 2rem; height: 2rem; flex: none; }
+  .telemetry-panel .ring-bg { stroke: #34392f; }
+  .telemetry-panel .ring-fg { stroke: var(--green); }
+  .telemetry-panel .bolt { fill: var(--green); }
+  .battery-value { color: var(--green); font-size: .95rem; font-weight: 700; }
+  .battery-mode { display: inline-block; margin-top: .15rem; padding: .15rem .25rem; border: 1px solid #52613a; color: var(--green); font: .42rem var(--mono); text-transform: uppercase; }
+  .battery-regen { margin-top: .12rem; color: #9da397; font: .43rem var(--mono); }
+  .eviction-panel { padding: .7rem .9rem .6rem 1rem; position: relative; background: #fff; }
+  .eviction-panel::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: #efaa36; }
+  .eviction-head { display: flex; justify-content: space-between; align-items: center; gap: .7rem; }
+  .eviction-title { font-size: .8rem; font-weight: 750; letter-spacing: -.02em; }
+  .eviction-note { color: #7c5213; background: #fff3d8; padding: .2rem .35rem; font: .45rem var(--mono); text-transform: uppercase; }
+  .eviction-desc { margin-top: .15rem; color: #777; font: .48rem var(--mono); }
+  .eviction-size { flex: none; font-size: 1.35rem; font-weight: 700; letter-spacing: -.06em; }
+  .eviction-details { display: flex; flex-wrap: wrap; gap: .35rem 1rem; margin-top: .5rem; padding-top: .4rem; border-top: 1px solid #eee; color: #777; font: .47rem var(--mono); }
+  .eviction-details b { color: #151515; font-weight: 500; }
+  .eviction-details a { color: #151515; }
+  .events-panel { padding: .7rem .85rem .45rem; }
+  .events-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: .45rem; }
+  .events-title { display: flex; align-items: baseline; gap: .5rem; font-size: .75rem; font-weight: 700; }
+  .events-count { color: #8b9186; font: .47rem var(--mono); }
+  .events-filter { color: var(--green); font: .48rem var(--mono); }
+  .events-table-wrap { overflow-x: auto; }
+  .events-table { width: 100%; border-collapse: collapse; text-align: left; }
+  .events-table th { padding: .35rem .4rem; border-bottom: 1px solid #30342d; color: #8b9186; font: .43rem var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+  .events-table td { padding: .45rem .4rem; border-bottom: 1px solid #232720; color: #e1e3dc; font: .48rem var(--mono); white-space: nowrap; }
+  .events-table td.dim { color: #8b9186; }
+  .events-table td a { color: var(--green); text-decoration: none; }
+  .events-empty { padding: .9rem .4rem !important; color: #9da397 !important; text-align: center; }
+  .dash-footer { display: flex; justify-content: space-between; margin-top: .55rem; color: #73786e; font: .43rem var(--mono); }
+  .donate { margin-top: .7rem; padding-top: .6rem; color: #777; border-top: 1px solid #c9cbc2; font-size: .65rem; }
+  .donate code { font: .62rem var(--mono); color: var(--ink); }
+  .donate button { color: var(--ink); border-color: #c9cbc2; border-radius: 0; }
+  .page #nodes { display: none !important; }
+  @media (pointer: coarse) {
+    .board-frame #board, .board-frame .board-ui { display: block !important; }
+    .board-frame .board-ui { display: flex !important; }
+    .board-frame .board-hint { display: block !important; }
+  }
+  @media (max-width: 720px) {
+    .page { padding: .75rem .6rem 1rem; }
+    .dash-kicker { display: none; }
+    .links { gap: .65rem; font-size: .55rem; }
+    .dash-canvas { padding: .7rem .55rem .55rem; }
+    .board-frame { height: min(55vh, 360px); min-height: 275px; }
+    .board-frame .board-ui { left: .3rem; right: .3rem; bottom: .3rem; justify-content: flex-start; }
+    .board-stats { margin-left: auto; }
+    .dash-metrics { grid-template-columns: 1fr 1fr; }
+    .dash-metric { padding: .5rem .5rem .45rem 0; }
+    .dash-metric + .dash-metric { padding-left: .55rem; }
+    .dash-metric:nth-child(3) { grid-column: 1 / -1; padding: .55rem 0 .45rem; border-left: 0; border-top: 1px solid #30342e; }
+    .dash-details { grid-template-columns: 1fr 1fr; gap: .55rem 0; }
+    .dash-detail { padding-right: .4rem; }
+    .dash-detail + .dash-detail { padding-left: .5rem; }
+    .dash-detail:nth-child(3) { grid-column: 1 / -1; padding: .5rem 0 0; border-left: 0; border-top: 1px solid #30342e; }
+    .eviction-title { font-size: .68rem; }
+    .eviction-desc { line-height: 1.4; }
+    .events-panel { padding: .6rem .45rem .4rem; }
+    .events-table { min-width: 34rem; }
+  }
 </style>
 </head>
 <body>
-<canvas id="board" role="img" aria-label="Collaborative canvas — drag to paint a signed stroke"></canvas>
 <main class="page">
-
-  <header>
-    <span class="brand">Rabta<i class="live-dot" aria-hidden="true"></i></span>
+  <header class="dash-header">
+    <span class="brand dash-brand"><i class="brand-mark" aria-hidden="true"></i>rabta<span class="dash-kicker">/ RELAY CONSOLE</span></span>
     <nav class="links" aria-label="Links">
       <span class="num" id="version">v0.0.1</span>
       <a id="donate" hidden>Donate</a>
       <a href="https://github.com/besoeasy/rabta" target="_blank" rel="noopener noreferrer">GitHub</a>
+      <span class="online"><i aria-hidden="true"></i>ONLINE</span>
     </nav>
   </header>
-  <p class="node-id"><span>Node ID</span><code id="node-id">—</code></p>
-
-  <section aria-label="Storage">
-    <h2>Storage</h2>
-    <div class="storage-head">
-      <span class="storage-used num" id="used">—</span>
-      <span class="storage-budget num">of <span id="budget">—</span></span>
+  <section class="dash-section dash-canvas" aria-label="Shared canvas">
+    <div class="section-head">
+      <div><span class="section-label">01 / Live canvas</span><h1 class="section-title">Shared canvas</h1><p class="section-subtitle">LIVE COLLABORATIVE SURFACE · SIGNED STROKES · 15 MIN TTL</p></div>
+      <span class="live-pill" id="canvas-live">● LIVE</span>
     </div>
-    <div class="bar" role="img" id="bar" aria-label="Storage usage">
-      <i class="c-events" id="bar-events"></i>
-      <i class="c-claimed" id="bar-claimed"></i>
-      <i class="c-unclaimed" id="bar-unclaimed"></i>
-    </div>
-    <div class="bar-scale"><span>0</span><span>Eviction starts when full</span></div>
-    <dl class="legend">
-      <div><dt><i class="sw c-events"></i>Events</dt><dd id="events-bytes">—</dd><dd class="pct" id="events-pct">—</dd></div>
-      <div><dt><i class="sw c-claimed"></i>Claimed blobs</dt><dd id="claimed-bytes">—</dd><dd class="pct" id="claimed-pct">—</dd></div>
-      <div><dt><i class="sw c-unclaimed"></i>Unclaimed blobs</dt><dd id="unclaimed-bytes">—</dd><dd class="pct" id="unclaimed-pct">—</dd></div>
-    </dl>
-  </section>
-
-  <section aria-label="Live stats">
-    <div class="stats">
-      <div class="stat"><span><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4h12M2 8h12M2 12h8"/></svg>Live events</span><b id="events">—</b></div>
-      <div class="stat"><span><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5 14 5v6l-6 3.5L2 11V5zM2 5l6 3.5L14 5M8 8.5v6"/></svg>Live blobs</span><b id="blobs">—</b></div>
-      <div class="stat"><span><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 6V2h4M14 10v4h-4M2 2l4.5 4.5M14 14l-4.5-4.5"/></svg>Max blob size</span><b id="max-blob">—</b></div>
-    </div>
-  </section>
-
-  <div class="pair" style="margin-top:3rem">
-    <section aria-label="Sync battery">
-      <h2>Sync battery</h2>
-      <div class="bat">
-        <svg class="ring" viewBox="0 0 100 100" role="img" aria-label="Sync battery level">
-          <circle class="ring-bg" cx="50" cy="50" r="42"/>
-          <circle class="ring-fg" id="bat-ring" cx="50" cy="50" r="42" transform="rotate(-90 50 50)"/>
-          <path class="bolt" d="M56 26 38 54h11l-5 20 18-30H51z"/>
-        </svg>
-        <div class="bat-info">
-          <div class="row"><span class="big num" id="bat-pct">—</span><span class="tag" id="bat-mode">—</span></div>
-          <div class="meta"><span id="bat-raw">—</span><span id="bat-regen">—</span></div>
+    <div class="board-frame" id="board-frame">
+      <canvas id="board" role="img" aria-label="Shared 1000 by 1000 drawing grid. Draw with pointer; pan with move mode; zoom with wheel or controls."></canvas>
+      <p class="board-hint" id="board-hint">Loading signed strokes…</p>
+      <div class="board-ui" role="toolbar" aria-label="Canvas controls">
+        <div class="board-colors">
+          <label class="board-picker"><input type="color" id="board-color" value="#c56aef" aria-label="Stroke color"><span class="board-picker-hex" id="board-color-hex">C56AEF</span></label>
+          <div class="board-sizes" role="group" aria-label="Brush size">
+            <button class="board-size" data-size="4" type="button" aria-label="Small brush" aria-pressed="false"><span></span></button>
+            <button class="board-size" data-size="10" type="button" aria-label="Medium brush" aria-pressed="true"><span></span></button>
+            <button class="board-size" data-size="22" type="button" aria-label="Large brush" aria-pressed="false"><span></span></button>
+          </div>
         </div>
-      </div>
-    </section>
-
-    <section aria-label="Eviction">
-      <h2>Eviction</h2>
-      <div class="bat">
-        <svg class="ring" viewBox="0 0 100 100" aria-hidden="true">
-          <rect class="blk" x="20" y="66" width="60" height="14"/>
-          <rect class="blk" x="20" y="48" width="60" height="14"/>
-          <rect class="blk out" x="20" y="24" width="60" height="14"/>
-        </svg>
-        <div class="bat-info">
-          <div class="row"><span class="big num" id="ev-next">—</span><span class="tag" id="ev-state">idle</span></div>
-          <div class="meta"><span>Next to go</span><span id="reaper-sweep" title="Reaper sweep status">—</span></div>
+        <div class="board-controls">
+          <button class="pan-button" id="board-pan" type="button" aria-label="Toggle pan mode" aria-pressed="false" title="Pan the grid">✥</button>
+          <div class="board-zoom" role="group" aria-label="Zoom controls">
+            <button class="zoom-button" id="zoom-out" type="button" aria-label="Zoom out">−</button>
+            <span class="zoom-level" id="zoom-level">100%</span>
+            <button class="zoom-button" id="zoom-in" type="button" aria-label="Zoom in">+</button>
+            <button class="fit-button" id="zoom-fit" type="button" aria-label="Fit grid">FIT</button>
+          </div>
         </div>
+        <span class="board-stats" id="board-stats">0 strokes · 0 painters</span>
       </div>
-    </section>
-  </div>
-
-  <section id="nodes" aria-label="Sync nodes" hidden>
-    <div class="row"><h2>Sync nodes</h2><span class="num" id="nodes-count" style="font-size:.9rem;color:var(--mid)"></span></div>
-    <div class="nodes-list" id="node-list"></div>
+    </div>
+    <div class="canvas-caption"><span>GRID 1000 × 1000 · ZOOM OUT TO EXPLORE</span><span>SCROLL TO ZOOM · SELECT MOVE TO PAN</span></div>
   </section>
 
-  <p class="board-hint" id="board-hint">Loading signed strokes…</p>
-  <div class="board-ui" role="toolbar" aria-label="Canvas controls">
-    <label class="board-picker">
-      <input type="color" id="board-color" value="#3ddc97" aria-label="Stroke color">
-      <span class="board-picker-hex" id="board-color-hex">3DDC97</span>
-    </label>
-    <div class="board-sizes" role="group" aria-label="Brush size">
-      <button class="board-size" data-size="4" type="button" aria-label="Thin brush" aria-pressed="false"><span></span></button>
-      <button class="board-size" data-size="10" type="button" aria-label="Medium brush" aria-pressed="true"><span></span></button>
-      <button class="board-size" data-size="22" type="button" aria-label="Thick brush" aria-pressed="false"><span></span></button>
+  <section class="dash-section telemetry-panel" aria-label="Node telemetry, identity and sync status">
+    <div class="telemetry-head"><span class="section-label">02 / Node telemetry</span><span class="telemetry-stamp"><i></i>LIVE DATA</span></div>
+    <div class="dash-metrics">
+      <div class="dash-metric"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/><circle cx="19" cy="18" r="3"/></svg><label>Live events</label><strong id="events">—</strong><small>Current retained event count</small></div>
+      <div class="dash-metric"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2 9 5v10l-9 5-9-5V7zM3 7l9 5 9-5M12 12v10"/></svg><label>Live blobs</label><strong id="blobs">—</strong><small>Encrypted · content-addressed</small></div>
+      <div class="dash-metric"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v14H4zM8 9h8M8 13h5M6 2v3m12-3v3"/></svg><label>Storage used</label><strong id="used">—</strong><div class="dash-storage-bar" role="img" id="bar" aria-label="Storage use"><i class="c-events" id="bar-events"></i><i class="c-claimed" id="bar-claimed"></i><i class="c-unclaimed" id="bar-unclaimed"></i></div><div class="storage-details"><span>of <b id="budget">—</b></span><span class="storage-limit">PER-BLOB LIMIT <b id="max-blob">—</b></span></div></div>
     </div>
-    <span class="board-stats" id="board-stats">0 strokes · 0 painters</span>
-  </div>
+    <div class="dash-legend" aria-label="Storage breakdown">
+      <span><i></i>Events <b id="events-bytes">—</b></span><span class="claimed"><i></i>Claimed blobs <b id="claimed-bytes">—</b></span><span class="unclaimed"><i></i>Unclaimed blobs <b id="unclaimed-bytes">—</b></span>
+    </div>
+    <div class="dash-details">
+      <div class="dash-detail"><svg class="detail-icon" viewBox="0 0 32 32" aria-hidden="true"><path d="M16 2 27 8v16l-11 6L5 24V8z"/><path d="m5 8 11 7 11-7M16 15v15"/><circle cx="16" cy="15" r="3"/></svg><div class="detail-copy"><div class="detail-label">Node identity · regenerated on restart</div><div class="detail-value"><code id="node-id">—</code><button class="copy-button" id="node-copy" type="button" aria-label="Copy node ID">COPY</button></div></div></div>
+      <div class="dash-detail"><svg class="detail-battery" viewBox="0 0 100 100" role="img" aria-label="Sync battery level"><circle class="ring-bg" cx="50" cy="50" r="42"/><circle class="ring-fg" id="bat-ring" cx="50" cy="50" r="42" transform="rotate(-90 50 50)"/><path class="bolt" d="M56 26 38 54h11l-5 20 18-30H51z"/></svg><div class="detail-copy"><div class="detail-label">Sync battery</div><div><span class="battery-value" id="bat-pct">—</span><span class="battery-mode" id="bat-mode">—</span></div><div class="battery-regen" id="bat-regen">—</div></div></div>
+      <div class="dash-detail"><svg class="detail-icon" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="7" r="4"/><circle cx="7" cy="24" r="4"/><circle cx="25" cy="24" r="4"/><path d="m14 11-5 9m9-9 5 9M11 24h10"/></svg><div class="detail-copy"><div class="detail-label">Peer network</div><div class="detail-value" id="peer-summary">—</div></div></div>
+    </div>
+    <dl class="sr-only" hidden><dd id="events-pct"></dd><dd id="claimed-pct"></dd><dd id="unclaimed-pct"></dd><dd id="bat-raw"></dd><dd id="ev-next"></dd><dd id="ev-state"></dd><dd id="reaper-sweep"></dd></dl>
+  </section>
 
-  <footer class="donate" id="donate-foot" hidden>
-    <span>Donate BTC</span>
-    <code id="donate-addr"></code>
-    <button id="donate-copy" type="button">Copy</button>
-  </footer>
+  <section class="dash-section eviction-panel" aria-label="Largest eviction candidate">
+    <div class="eviction-head"><div><div class="label">03 / Eviction watch</div><div class="candtitle">Largest eligible event <span class="eviction-note" id="ev-state-label">Potential first victim</span></div><div class="eviction-desc">Only evicted if storage pressure requires it · policy-protected events excluded</div></div><strong class="eviction-size" id="ev-next-label">—</strong></div>
+    <div class="eviction-details" id="candidate-details" hidden><span>ENVELOPE <b id="candidate-envelope">—</b></span><span>EXCLUSIVE BLOBS <b id="candidate-blobs">—</b></span><span>COLLECTION <b id="candidate-collection">—</b></span><a id="candidate-id" href="#" target="_blank" rel="noopener noreferrer">EVENT ID　—</a></div>
+    <div class="eviction-desc" id="candidate-empty">No eligible event candidates right now.</div>
+  </section>
 
+  <section class="dash-section events-panel" aria-label="Recent events">
+    <div class="events-head"><div class="events-title"><span class="index">04 /</span><span>Recent events</span><span class="events-count" id="recent-count">—</span></div><span class="events-filter">NEWEST FIRST</span></div>
+    <div class="events-table-wrap"><table class="events-table"><thead><tr><th>Time</th><th>Event ID</th><th>Collection</th><th>Owner</th><th>Blob refs</th></tr></thead><tbody id="recent-events"><tr><td class="events-empty" colspan="5">Loading recent events…</td></tr></tbody></table></div>
+  </section>
+  <footer class="dash-footer"><span>RABTA / SINGLE-NODE OBSERVABILITY</span><span>REFRESHES AUTOMATICALLY</span></footer>
+  <footer class="donate" id="donate-foot" hidden><span>Donate BTC</span><code id="donate-addr"></code><button id="donate-copy" type="button">Copy</button></footer>
+  <section id="nodes" aria-label="Sync nodes" hidden><span id="nodes-count"></span><div id="node-list"></div></section>
 </main>
 
 <script>/* tweetnacl v1.0.3 - https://github.com/dchest/tweetnacl-js (Public Domain) */!function(i){"use strict";var m=function(r,n){this.hi=0|r,this.lo=0|n},v=function(r){var n,e=new Float64Array(16);if(r)for(n=0;n<r.length;n++)e[n]=r[n];return e},a=function(){throw new Error("no PRNG")},o=new Uint8Array(16),e=new Uint8Array(32);e[0]=9;var c=v(),w=v([1]),g=v([56129,1]),y=v([30883,4953,19914,30187,55467,16705,2637,112,59544,30585,16505,36039,65139,11119,27886,20995]),l=v([61785,9906,39828,60374,45398,33411,5274,224,53552,61171,33010,6542,64743,22239,55772,9222]),t=v([54554,36645,11616,51542,42930,38181,51040,26924,56412,64982,57905,49316,21502,52590,14035,8553]),f=v([26200,26214,26214,26214,26214,26214,26214,26214,26214,26214,26214,26214,26214,26214,26214,26214]),s=v([41136,18958,6951,50414,58488,44335,6150,12099,55207,15867,153,11085,57099,20417,9344,11139]);function h(r,n){return r<<n|r>>>32-n}function b(r,n){var e=255&r[n+3];return(e=(e=e<<8|255&r[n+2])<<8|255&r[n+1])<<8|255&r[n+0]}function B(r,n){var e=r[n]<<24|r[n+1]<<16|r[n+2]<<8|r[n+3],t=r[n+4]<<24|r[n+5]<<16|r[n+6]<<8|r[n+7];return new m(e,t)}function p(r,n,e){var t;for(t=0;t<4;t++)r[n+t]=255&e,e>>>=8}function S(r,n,e){r[n]=e.hi>>24&255,r[n+1]=e.hi>>16&255,r[n+2]=e.hi>>8&255,r[n+3]=255&e.hi,r[n+4]=e.lo>>24&255,r[n+5]=e.lo>>16&255,r[n+6]=e.lo>>8&255,r[n+7]=255&e.lo}function u(r,n,e,t,o){var i,a=0;for(i=0;i<o;i++)a|=r[n+i]^e[t+i];return(1&a-1>>>8)-1}function A(r,n,e,t){return u(r,n,e,t,16)}function _(r,n,e,t){return u(r,n,e,t,32)}function U(r,n,e,t,o){var i,a,f,u=new Uint32Array(16),c=new Uint32Array(16),w=new Uint32Array(16),y=new Uint32Array(4);for(i=0;i<4;i++)c[5*i]=b(t,4*i),c[1+i]=b(e,4*i),c[6+i]=b(n,4*i),c[11+i]=b(e,16+4*i);for(i=0;i<16;i++)w[i]=c[i];for(i=0;i<20;i++){for(a=0;a<4;a++){for(f=0;f<4;f++)y[f]=c[(5*a+4*f)%16];for(y[1]^=h(y[0]+y[3]|0,7),y[2]^=h(y[1]+y[0]|0,9),y[3]^=h(y[2]+y[1]|0,13),y[0]^=h(y[3]+y[2]|0,18),f=0;f<4;f++)u[4*a+(a+f)%4]=y[f]}for(f=0;f<16;f++)c[f]=u[f]}if(o){for(i=0;i<16;i++)c[i]=c[i]+w[i]|0;for(i=0;i<4;i++)c[5*i]=c[5*i]-b(t,4*i)|0,c[6+i]=c[6+i]-b(n,4*i)|0;for(i=0;i<4;i++)p(r,4*i,c[5*i]),p(r,16+4*i,c[6+i])}else for(i=0;i<16;i++)p(r,4*i,c[i]+w[i]|0)}function E(r,n,e,t){U(r,n,e,t,!1)}function x(r,n,e,t){return U(r,n,e,t,!0),0}var d=new Uint8Array([101,120,112,97,110,100,32,51,50,45,98,121,116,101,32,107]);function K(r,n,e,t,o,i,a){var f,u,c=new Uint8Array(16),w=new Uint8Array(64);if(!o)return 0;for(u=0;u<16;u++)c[u]=0;for(u=0;u<8;u++)c[u]=i[u];for(;64<=o;){for(E(w,c,a,d),u=0;u<64;u++)r[n+u]=(e?e[t+u]:0)^w[u];for(f=1,u=8;u<16;u++)f=f+(255&c[u])|0,c[u]=255&f,f>>>=8;o-=64,n+=64,e&&(t+=64)}if(0<o)for(E(w,c,a,d),u=0;u<o;u++)r[n+u]=(e?e[t+u]:0)^w[u];return 0}function Y(r,n,e,t,o){return K(r,n,null,0,e,t,o)}function L(r,n,e,t,o){var i=new Uint8Array(32);return x(i,t,o,d),Y(r,n,e,t.subarray(16),i)}function T(r,n,e,t,o,i,a){var f=new Uint8Array(32);return x(f,i,a,d),K(r,n,e,t,o,i.subarray(16),f)}function k(r,n){var e,t=0;for(e=0;e<17;e++)t=t+(r[e]+n[e]|0)|0,r[e]=255&t,t>>>=8}var z=new Uint32Array([5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,252]);function R(r,n,e,t,o,i){var a,f,u,c,w=new Uint32Array(17),y=new Uint32Array(17),l=new Uint32Array(17),s=new Uint32Array(17),h=new Uint32Array(17);for(u=0;u<17;u++)y[u]=l[u]=0;for(u=0;u<16;u++)y[u]=i[u];for(y[3]&=15,y[4]&=252,y[7]&=15,y[8]&=252,y[11]&=15,y[12]&=252,y[15]&=15;0<o;){for(u=0;u<17;u++)s[u]=0;for(u=0;u<16&&u<o;++u)s[u]=e[t+u];for(s[u]=1,t+=u,o-=u,k(l,s),f=0;f<17;f++)for(u=w[f]=0;u<17;u++)w[f]=w[f]+l[u]*(u<=f?y[f-u]:320*y[f+17-u]|0)|0;for(f=0;f<17;f++)l[f]=w[f];for(u=c=0;u<16;u++)c=c+l[u]|0,l[u]=255&c,c>>>=8;for(c=c+l[16]|0,l[16]=3&c,c=5*(c>>>2)|0,u=0;u<16;u++)c=c+l[u]|0,l[u]=255&c,c>>>=8;c=c+l[16]|0,l[16]=c}for(u=0;u<17;u++)h[u]=l[u];for(k(l,z),a=0|-(l[16]>>>7),u=0;u<17;u++)l[u]^=a&(h[u]^l[u]);for(u=0;u<16;u++)s[u]=i[u+16];for(s[16]=0,k(l,s),u=0;u<16;u++)r[n+u]=l[u];return 0}function P(r,n,e,t,o,i){var a=new Uint8Array(16);return R(a,0,e,t,o,i),A(r,n,a,0)}function M(r,n,e,t,o){var i;if(e<32)return-1;for(T(r,0,n,0,e,t,o),R(r,16,r,32,e-32,r),i=0;i<16;i++)r[i]=0;return 0}function N(r,n,e,t,o){var i,a=new Uint8Array(32);if(e<32)return-1;if(L(a,0,32,t,o),0!==P(n,16,n,32,e-32,a))return-1;for(T(r,0,n,0,e,t,o),i=0;i<32;i++)r[i]=0;return 0}function O(r,n){var e;for(e=0;e<16;e++)r[e]=0|n[e]}function C(r){var n,e;for(e=0;e<16;e++)r[e]+=65536,n=Math.floor(r[e]/65536),r[(e+1)*(e<15?1:0)]+=n-1+37*(n-1)*(15===e?1:0),r[e]-=65536*n}function F(r,n,e){for(var t,o=~(e-1),i=0;i<16;i++)t=o&(r[i]^n[i]),r[i]^=t,n[i]^=t}function Z(r,n){var e,t,o,i=v(),a=v();for(e=0;e<16;e++)a[e]=n[e];for(C(a),C(a),C(a),t=0;t<2;t++){for(i[0]=a[0]-65517,e=1;e<15;e++)i[e]=a[e]-65535-(i[e-1]>>16&1),i[e-1]&=65535;i[15]=a[15]-32767-(i[14]>>16&1),o=i[15]>>16&1,i[14]&=65535,F(a,i,1-o)}for(e=0;e<16;e++)r[2*e]=255&a[e],r[2*e+1]=a[e]>>8}function G(r,n){var e=new Uint8Array(32),t=new Uint8Array(32);return Z(e,r),Z(t,n),_(e,0,t,0)}function q(r){var n=new Uint8Array(32);return Z(n,r),1&n[0]}function D(r,n){var e;for(e=0;e<16;e++)r[e]=n[2*e]+(n[2*e+1]<<8);r[15]&=32767}function I(r,n,e){var t;for(t=0;t<16;t++)r[t]=n[t]+e[t]|0}function V(r,n,e){var t;for(t=0;t<16;t++)r[t]=n[t]-e[t]|0}function X(r,n,e){var t,o,i=new Float64Array(31);for(t=0;t<31;t++)i[t]=0;for(t=0;t<16;t++)for(o=0;o<16;o++)i[t+o]+=n[t]*e[o];for(t=0;t<15;t++)i[t]+=38*i[t+16];for(t=0;t<16;t++)r[t]=i[t];C(r),C(r)}function j(r,n){X(r,n,n)}function H(r,n){var e,t=v();for(e=0;e<16;e++)t[e]=n[e];for(e=253;0<=e;e--)j(t,t),2!==e&&4!==e&&X(t,t,n);for(e=0;e<16;e++)r[e]=t[e]}function J(r,n){var e,t=v();for(e=0;e<16;e++)t[e]=n[e];for(e=250;0<=e;e--)j(t,t),1!==e&&X(t,t,n);for(e=0;e<16;e++)r[e]=t[e]}function Q(r,n,e){var t,o,i=new Uint8Array(32),a=new Float64Array(80),f=v(),u=v(),c=v(),w=v(),y=v(),l=v();for(o=0;o<31;o++)i[o]=n[o];for(i[31]=127&n[31]|64,i[0]&=248,D(a,e),o=0;o<16;o++)u[o]=a[o],w[o]=f[o]=c[o]=0;for(f[0]=w[0]=1,o=254;0<=o;--o)F(f,u,t=i[o>>>3]>>>(7&o)&1),F(c,w,t),I(y,f,c),V(f,f,c),I(c,u,w),V(u,u,w),j(w,y),j(l,f),X(f,c,f),X(c,u,y),I(y,f,c),V(f,f,c),j(u,f),V(c,w,l),X(f,c,g),I(f,f,w),X(c,c,f),X(f,w,l),X(w,u,a),j(u,y),F(f,u,t),F(c,w,t);for(o=0;o<16;o++)a[o+16]=f[o],a[o+32]=c[o],a[o+48]=u[o],a[o+64]=w[o];var s=a.subarray(32),h=a.subarray(16);return H(s,s),X(h,h,s),Z(r,h),0}function W(r,n){return Q(r,n,e)}function $(r,n){return a(n,32),W(r,n)}function rr(r,n,e){var t=new Uint8Array(32);return Q(t,e,n),x(r,o,t,d)}var nr=M,er=N;function tr(){var r,n,e,t=0,o=0,i=0,a=0,f=65535;for(e=0;e<arguments.length;e++)t+=(r=arguments[e].lo)&f,o+=r>>>16,i+=(n=arguments[e].hi)&f,a+=n>>>16;return new m((i+=(o+=t>>>16)>>>16)&f|(a+=i>>>16)<<16,t&f|o<<16)}function or(r,n){return new m(r.hi>>>n,r.lo>>>n|r.hi<<32-n)}function ir(){var r,n=0,e=0;for(r=0;r<arguments.length;r++)n^=arguments[r].lo,e^=arguments[r].hi;return new m(e,n)}function ar(r,n){var e,t,o=32-n;return n<32?(e=r.hi>>>n|r.lo<<o,t=r.lo>>>n|r.hi<<o):n<64&&(e=r.lo>>>n|r.hi<<o,t=r.hi>>>n|r.lo<<o),new m(e,t)}var fr=[new m(1116352408,3609767458),new m(1899447441,602891725),new m(3049323471,3964484399),new m(3921009573,2173295548),new m(961987163,4081628472),new m(1508970993,3053834265),new m(2453635748,2937671579),new m(2870763221,3664609560),new m(3624381080,2734883394),new m(310598401,1164996542),new m(607225278,1323610764),new m(1426881987,3590304994),new m(1925078388,4068182383),new m(2162078206,991336113),new m(2614888103,633803317),new m(3248222580,3479774868),new m(3835390401,2666613458),new m(4022224774,944711139),new m(264347078,2341262773),new m(604807628,2007800933),new m(770255983,1495990901),new m(1249150122,1856431235),new m(1555081692,3175218132),new m(1996064986,2198950837),new m(2554220882,3999719339),new m(2821834349,766784016),new m(2952996808,2566594879),new m(3210313671,3203337956),new m(3336571891,1034457026),new m(3584528711,2466948901),new m(113926993,3758326383),new m(338241895,168717936),new m(666307205,1188179964),new m(773529912,1546045734),new m(1294757372,1522805485),new m(1396182291,2643833823),new m(1695183700,2343527390),new m(1986661051,1014477480),new m(2177026350,1206759142),new m(2456956037,344077627),new m(2730485921,1290863460),new m(2820302411,3158454273),new m(3259730800,3505952657),new m(3345764771,106217008),new m(3516065817,3606008344),new m(3600352804,1432725776),new m(4094571909,1467031594),new m(275423344,851169720),new m(430227734,3100823752),new m(506948616,1363258195),new m(659060556,3750685593),new m(883997877,3785050280),new m(958139571,3318307427),new m(1322822218,3812723403),new m(1537002063,2003034995),new m(1747873779,3602036899),new m(1955562222,1575990012),new m(2024104815,1125592928),new m(2227730452,2716904306),new m(2361852424,442776044),new m(2428436474,593698344),new m(2756734187,3733110249),new m(3204031479,2999351573),new m(3329325298,3815920427),new m(3391569614,3928383900),new m(3515267271,566280711),new m(3940187606,3454069534),new m(4118630271,4000239992),new m(116418474,1914138554),new m(174292421,2731055270),new m(289380356,3203993006),new m(460393269,320620315),new m(685471733,587496836),new m(852142971,1086792851),new m(1017036298,365543100),new m(1126000580,2618297676),new m(1288033470,3409855158),new m(1501505948,4234509866),new m(1607167915,987167468),new m(1816402316,1246189591)];function ur(r,n,e){var t,o,i,a=[],f=[],u=[],c=[];for(o=0;o<8;o++)a[o]=u[o]=B(r,8*o);for(var w,y,l,s,h,v,g,b,p,A,_,U,E,x,d=0;128<=e;){for(o=0;o<16;o++)c[o]=B(n,8*o+d);for(o=0;o<80;o++){for(i=0;i<8;i++)f[i]=u[i];for(t=tr(u[7],ir(ar(x=u[4],14),ar(x,18),ar(x,41)),(p=u[4],A=u[5],_=u[6],0,U=p.hi&A.hi^~p.hi&_.hi,E=p.lo&A.lo^~p.lo&_.lo,new m(U,E)),fr[o],c[o%16]),f[7]=tr(t,ir(ar(b=u[0],28),ar(b,34),ar(b,39)),(l=u[0],s=u[1],h=u[2],0,v=l.hi&s.hi^l.hi&h.hi^s.hi&h.hi,g=l.lo&s.lo^l.lo&h.lo^s.lo&h.lo,new m(v,g))),f[3]=tr(f[3],t),i=0;i<8;i++)u[(i+1)%8]=f[i];if(o%16==15)for(i=0;i<16;i++)c[i]=tr(c[i],c[(i+9)%16],ir(ar(y=c[(i+1)%16],1),ar(y,8),or(y,7)),ir(ar(w=c[(i+14)%16],19),ar(w,61),or(w,6)))}for(o=0;o<8;o++)u[o]=tr(u[o],a[o]),a[o]=u[o];d+=128,e-=128}for(o=0;o<8;o++)S(r,8*o,a[o]);return e}var cr=new Uint8Array([106,9,230,103,243,188,201,8,187,103,174,133,132,202,167,59,60,110,243,114,254,148,248,43,165,79,245,58,95,29,54,241,81,14,82,127,173,230,130,209,155,5,104,140,43,62,108,31,31,131,217,171,251,65,189,107,91,224,205,25,19,126,33,121]);function wr(r,n,e){var t,o=new Uint8Array(64),i=new Uint8Array(256),a=e;for(t=0;t<64;t++)o[t]=cr[t];for(ur(o,n,e),e%=128,t=0;t<256;t++)i[t]=0;for(t=0;t<e;t++)i[t]=n[a-e+t];for(i[e]=128,i[(e=256-128*(e<112?1:0))-9]=0,S(i,e-8,new m(a/536870912|0,a<<3)),ur(o,i,e),t=0;t<64;t++)r[t]=o[t];return 0}function yr(r,n){var e=v(),t=v(),o=v(),i=v(),a=v(),f=v(),u=v(),c=v(),w=v();V(e,r[1],r[0]),V(w,n[1],n[0]),X(e,e,w),I(t,r[0],r[1]),I(w,n[0],n[1]),X(t,t,w),X(o,r[3],n[3]),X(o,o,l),X(i,r[2],n[2]),I(i,i,i),V(a,t,e),V(f,i,o),I(u,i,o),I(c,t,e),X(r[0],a,f),X(r[1],c,u),X(r[2],u,f),X(r[3],a,c)}function lr(r,n,e){var t;for(t=0;t<4;t++)F(r[t],n[t],e)}function sr(r,n){var e=v(),t=v(),o=v();H(o,n[2]),X(e,n[0],o),X(t,n[1],o),Z(r,t),r[31]^=q(e)<<7}function hr(r,n,e){var t,o;for(O(r[0],c),O(r[1],w),O(r[2],w),O(r[3],c),o=255;0<=o;--o)lr(r,n,t=e[o/8|0]>>(7&o)&1),yr(n,r),yr(r,r),lr(r,n,t)}function vr(r,n){var e=[v(),v(),v(),v()];O(e[0],t),O(e[1],f),O(e[2],w),X(e[3],t,f),hr(r,e,n)}function gr(r,n,e){var t,o=new Uint8Array(64),i=[v(),v(),v(),v()];for(e||a(n,32),wr(o,n,32),o[0]&=248,o[31]&=127,o[31]|=64,vr(i,o),sr(r,i),t=0;t<32;t++)n[t+32]=r[t];return 0}var br=new Float64Array([237,211,245,92,26,99,18,88,214,156,247,162,222,249,222,20,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,16]);function pr(r,n){var e,t,o,i;for(t=63;32<=t;--t){for(e=0,o=t-32,i=t-12;o<i;++o)n[o]+=e-16*n[t]*br[o-(t-32)],e=Math.floor((n[o]+128)/256),n[o]-=256*e;n[o]+=e,n[t]=0}for(o=e=0;o<32;o++)n[o]+=e-(n[31]>>4)*br[o],e=n[o]>>8,n[o]&=255;for(o=0;o<32;o++)n[o]-=e*br[o];for(t=0;t<32;t++)n[t+1]+=n[t]>>8,r[t]=255&n[t]}function Ar(r){var n,e=new Float64Array(64);for(n=0;n<64;n++)e[n]=r[n];for(n=0;n<64;n++)r[n]=0;pr(r,e)}function _r(r,n,e,t){var o,i,a=new Uint8Array(64),f=new Uint8Array(64),u=new Uint8Array(64),c=new Float64Array(64),w=[v(),v(),v(),v()];wr(a,t,32),a[0]&=248,a[31]&=127,a[31]|=64;var y=e+64;for(o=0;o<e;o++)r[64+o]=n[o];for(o=0;o<32;o++)r[32+o]=a[32+o];for(wr(u,r.subarray(32),e+32),Ar(u),vr(w,u),sr(r,w),o=32;o<64;o++)r[o]=t[o];for(wr(f,r,e+64),Ar(f),o=0;o<64;o++)c[o]=0;for(o=0;o<32;o++)c[o]=u[o];for(o=0;o<32;o++)for(i=0;i<32;i++)c[o+i]+=f[o]*a[i];return pr(r.subarray(32),c),y}function Ur(r,n,e,t){var o,i=new Uint8Array(32),a=new Uint8Array(64),f=[v(),v(),v(),v()],u=[v(),v(),v(),v()];if(e<64)return-1;if(function(r,n){var e=v(),t=v(),o=v(),i=v(),a=v(),f=v(),u=v();if(O(r[2],w),D(r[1],n),j(o,r[1]),X(i,o,y),V(o,o,r[2]),I(i,r[2],i),j(a,i),j(f,a),X(u,f,a),X(e,u,o),X(e,e,i),J(e,e),X(e,e,o),X(e,e,i),X(e,e,i),X(r[0],e,i),j(t,r[0]),X(t,t,i),G(t,o)&&X(r[0],r[0],s),j(t,r[0]),X(t,t,i),G(t,o))return 1;q(r[0])===n[31]>>7&&V(r[0],c,r[0]),X(r[3],r[0],r[1])}(u,t))return-1;for(o=0;o<e;o++)r[o]=n[o];for(o=0;o<32;o++)r[o+32]=t[o];if(wr(a,r,e),Ar(a),hr(f,u,a),vr(u,n.subarray(32)),yr(f,u),sr(i,f),e-=64,_(n,0,i,0)){for(o=0;o<e;o++)r[o]=0;return-1}for(o=0;o<e;o++)r[o]=n[o+64];return e}function Er(r,n){if(32!==r.length)throw new Error("bad key size");if(24!==n.length)throw new Error("bad nonce size")}function xr(){for(var r=0;r<arguments.length;r++)if(!(arguments[r]instanceof Uint8Array))throw new TypeError("unexpected type, use Uint8Array")}function dr(r){for(var n=0;n<r.length;n++)r[n]=0}i.lowlevel={crypto_core_hsalsa20:x,crypto_stream_xor:T,crypto_stream:L,crypto_stream_salsa20_xor:K,crypto_stream_salsa20:Y,crypto_onetimeauth:R,crypto_onetimeauth_verify:P,crypto_verify_16:A,crypto_verify_32:_,crypto_secretbox:M,crypto_secretbox_open:N,crypto_scalarmult:Q,crypto_scalarmult_base:W,crypto_box_beforenm:rr,crypto_box_afternm:nr,crypto_box:function(r,n,e,t,o,i){var a=new Uint8Array(32);return rr(a,o,i),nr(r,n,e,t,a)},crypto_box_open:function(r,n,e,t,o,i){var a=new Uint8Array(32);return rr(a,o,i),er(r,n,e,t,a)},crypto_box_keypair:$,crypto_hash:wr,crypto_sign:_r,crypto_sign_keypair:gr,crypto_sign_open:Ur,crypto_secretbox_KEYBYTES:32,crypto_secretbox_NONCEBYTES:24,crypto_secretbox_ZEROBYTES:32,crypto_secretbox_BOXZEROBYTES:16,crypto_scalarmult_BYTES:32,crypto_scalarmult_SCALARBYTES:32,crypto_box_PUBLICKEYBYTES:32,crypto_box_SECRETKEYBYTES:32,crypto_box_BEFORENMBYTES:32,crypto_box_NONCEBYTES:24,crypto_box_ZEROBYTES:32,crypto_box_BOXZEROBYTES:16,crypto_sign_BYTES:64,crypto_sign_PUBLICKEYBYTES:32,crypto_sign_SECRETKEYBYTES:64,crypto_sign_SEEDBYTES:32,crypto_hash_BYTES:64,gf:v,D:y,L:br,pack25519:Z,unpack25519:D,M:X,A:I,S:j,Z:V,pow2523:J,add:yr,set25519:O,modL:pr,scalarmult:hr,scalarbase:vr},i.randomBytes=function(r){var n=new Uint8Array(r);return a(n,r),n},i.secretbox=function(r,n,e){xr(r,n,e),Er(e,n);for(var t=new Uint8Array(32+r.length),o=new Uint8Array(t.length),i=0;i<r.length;i++)t[i+32]=r[i];return M(o,t,t.length,n,e),o.subarray(16)},i.secretbox.open=function(r,n,e){xr(r,n,e),Er(e,n);for(var t=new Uint8Array(16+r.length),o=new Uint8Array(t.length),i=0;i<r.length;i++)t[i+16]=r[i];return t.length<32||0!==N(o,t,t.length,n,e)?null:o.subarray(32)},i.secretbox.keyLength=32,i.secretbox.nonceLength=24,i.secretbox.overheadLength=16,i.scalarMult=function(r,n){if(xr(r,n),32!==r.length)throw new Error("bad n size");if(32!==n.length)throw new Error("bad p size");var e=new Uint8Array(32);return Q(e,r,n),e},i.scalarMult.base=function(r){if(xr(r),32!==r.length)throw new Error("bad n size");var n=new Uint8Array(32);return W(n,r),n},i.scalarMult.scalarLength=32,i.scalarMult.groupElementLength=32,i.box=function(r,n,e,t){var o=i.box.before(e,t);return i.secretbox(r,n,o)},i.box.before=function(r,n){xr(r,n),function(r,n){if(32!==r.length)throw new Error("bad public key size");if(32!==n.length)throw new Error("bad secret key size")}(r,n);var e=new Uint8Array(32);return rr(e,r,n),e},i.box.after=i.secretbox,i.box.open=function(r,n,e,t){var o=i.box.before(e,t);return i.secretbox.open(r,n,o)},i.box.open.after=i.secretbox.open,i.box.keyPair=function(){var r=new Uint8Array(32),n=new Uint8Array(32);return $(r,n),{publicKey:r,secretKey:n}},i.box.keyPair.fromSecretKey=function(r){if(xr(r),32!==r.length)throw new Error("bad secret key size");var n=new Uint8Array(32);return W(n,r),{publicKey:n,secretKey:new Uint8Array(r)}},i.box.publicKeyLength=32,i.box.secretKeyLength=32,i.box.sharedKeyLength=32,i.box.nonceLength=24,i.box.overheadLength=i.secretbox.overheadLength,i.sign=function(r,n){if(xr(r,n),64!==n.length)throw new Error("bad secret key size");var e=new Uint8Array(64+r.length);return _r(e,r,r.length,n),e},i.sign.open=function(r,n){if(xr(r,n),32!==n.length)throw new Error("bad public key size");var e=new Uint8Array(r.length),t=Ur(e,r,r.length,n);if(t<0)return null;for(var o=new Uint8Array(t),i=0;i<o.length;i++)o[i]=e[i];return o},i.sign.detached=function(r,n){for(var e=i.sign(r,n),t=new Uint8Array(64),o=0;o<t.length;o++)t[o]=e[o];return t},i.sign.detached.verify=function(r,n,e){if(xr(r,n,e),64!==n.length)throw new Error("bad signature size");if(32!==e.length)throw new Error("bad public key size");var t,o=new Uint8Array(64+r.length),i=new Uint8Array(64+r.length);for(t=0;t<64;t++)o[t]=n[t];for(t=0;t<r.length;t++)o[t+64]=r[t];return 0<=Ur(i,o,o.length,e)},i.sign.keyPair=function(){var r=new Uint8Array(32),n=new Uint8Array(64);return gr(r,n),{publicKey:r,secretKey:n}},i.sign.keyPair.fromSecretKey=function(r){if(xr(r),64!==r.length)throw new Error("bad secret key size");for(var n=new Uint8Array(32),e=0;e<n.length;e++)n[e]=r[32+e];return{publicKey:n,secretKey:new Uint8Array(r)}},i.sign.keyPair.fromSeed=function(r){if(xr(r),32!==r.length)throw new Error("bad seed size");for(var n=new Uint8Array(32),e=new Uint8Array(64),t=0;t<32;t++)e[t]=r[t];return gr(n,e,!0),{publicKey:n,secretKey:e}},i.sign.publicKeyLength=32,i.sign.secretKeyLength=64,i.sign.seedLength=32,i.sign.signatureLength=64,i.hash=function(r){xr(r);var n=new Uint8Array(64);return wr(n,r,r.length),n},i.hash.hashLength=64,i.verify=function(r,n){return xr(r,n),0!==r.length&&0!==n.length&&(r.length===n.length&&0===u(r,0,n,0,r.length))},i.setPRNG=function(r){a=r},function(){var o="undefined"!=typeof self?self.crypto||self.msCrypto:null;if(o&&o.getRandomValues){i.setPRNG(function(r,n){var e,t=new Uint8Array(n);for(e=0;e<n;e+=65536)o.getRandomValues(t.subarray(e,e+Math.min(n-e,65536)));for(e=0;e<n;e++)r[e]=t[e];dr(t)})}else"undefined"!=typeof require&&(o=require("crypto"))&&o.randomBytes&&i.setPRNG(function(r,n){var e,t=o.randomBytes(n);for(e=0;e<n;e++)r[e]=t[e];dr(t)})}()}("undefined"!=typeof module&&module.exports?module.exports:self.nacl=self.nacl||{});</script>
@@ -458,14 +591,18 @@
       const ev = s.events?.bytes ?? 0;
       const cl = s.blobs?.claimed_bytes ?? 0;
       const un = s.blobs?.unclaimed_bytes ?? 0;
-      const stored = ev + cl + un;
-      // Bar is scaled to the storage budget; fall back to stored total if budget is unknown.
-      const scale = budget > 0 ? Math.max(budget, stored) : stored;
+      const charged = ev + cl;
+      // The STORAGE budget charges events and claimed blobs; unclaimed blobs
+      // are reported separately and governed by their own cap.
+      const scale = budget > 0 ? Math.max(budget, charged) : charged;
       [['events', ev], ['claimed', cl], ['unclaimed', un]].forEach(([k, v]) => {
         $(k + '-bytes').textContent = fmtBytes(v);
-        $(k + '-pct').textContent = fmtShare(v, stored);
+        $(k + '-pct').textContent = fmtShare(v, charged + un);
+      });
+      [['events', ev], ['claimed', cl]].forEach(([k, v]) => {
         $('bar-' + k).style.width = (scale > 0 ? clamp(v / scale * 100) : 0) + '%';
       });
+      $('bar-unclaimed').style.width = '0%';
 
       // Eviction runs above the budget, removing the largest event first.
       const c = s.eviction?.candidates ?? {};
@@ -474,6 +611,28 @@
       st.textContent = evicting ? 'Evicting' : 'Idle';
       st.classList.toggle('on', evicting);
       $('ev-next').textContent = (c.largest_bytes ?? 0) > 0 ? fmtBytes(c.largest_bytes) : '—';
+      $('ev-next-label').textContent = fmtBytes(c.largest_event?.reclaimable_bytes ?? c.largest_bytes);
+      $('ev-state-label').textContent = evicting ? 'Storage pressure active' : 'Potential first victim';
+      $('candidate-details').hidden = !c.largest_event;
+      $('candidate-empty').hidden = !!c.largest_event;
+      if (c.largest_event) {
+        $('candidate-envelope').textContent = fmtBytes(c.largest_event.envelope_bytes);
+        $('candidate-blobs').textContent = fmtBytes(c.largest_event.blob_bytes);
+        $('candidate-collection').textContent = c.largest_event.collection || '—';
+        const link = $('candidate-id');
+        link.textContent = `EVENT ID　${c.largest_event.id.slice(0, 8)}…${c.largest_event.id.slice(-6)}`;
+        link.href = `/api/v1/events/${encodeURIComponent(c.largest_event.id)}`;
+        link.title = c.largest_event.id;
+      } else {
+        $('ev-next-label').textContent = '—';
+      }
+      $('recent-count').textContent = `${fmtCount(s.events?.live)} retained`;
+      const configuredPeers = Array.isArray(s.sync) ? s.sync.length : 0;
+      const peers = Array.isArray(s.peers?.items) ? s.peers.items : [];
+      const peerIssues = peers.filter((peer) => peer.last_error_at != null && (peer.last_success_at == null || peer.last_error_at > peer.last_success_at)).length;
+      $('peer-summary').textContent = configuredPeers
+        ? `${configuredPeers} configured · ${peerIssues} with recent errors`
+        : 'No peers configured';
       const sweep = $('reaper-sweep');
       if (sweep) {
         sweep.textContent = sweepAge(s.reaper?.last_sweep_age_s);
@@ -484,14 +643,16 @@
 
       renderNodes(s.peers?.items ?? []);
 
-      const b = s.peers?.battery ?? { remaining: 1000000, max: 1000000, regen_per_sec: 30, mode: 'readwrite' };
-      const pct = b.max > 0 ? clamp(b.remaining / b.max * 100) : 0;
-      $('bat-pct').textContent = Math.round(pct) + '%';
-      $('bat-ring').style.strokeDashoffset = 263.9 * (1 - pct / 100);
-      $('bat-raw').textContent = `${num(b.remaining)} / ${num(b.max)}`;
-      $('bat-regen').textContent = `+${b.regen_per_sec.toLocaleString('en-US')} per sec`;
+      const b = s.peers?.battery;
+      const pct = b && b.max > 0 ? clamp(b.remaining / b.max * 100) : null;
+      $('bat-pct').textContent = pct == null ? '—' : Math.round(pct) + '%';
+      $('bat-ring').style.strokeDashoffset = 263.9 * (1 - (pct ?? 0) / 100);
+      $('bat-raw').textContent = b && b.max > 0 ? `${num(b.remaining)} / ${num(b.max)}` : 'Unavailable';
+      $('bat-regen').textContent = b?.regen_per_sec != null
+        ? `+${Number(b.regen_per_sec).toLocaleString('en-US')} units / sec`
+        : 'No battery reading yet';
       const mode = $('bat-mode');
-      const label = String(b.mode ?? '').replace(/_/g, ' ');
+      const label = String(b?.mode ?? '').replace(/_/g, ' ');
       mode.textContent = label ? label.charAt(0).toUpperCase() + label.slice(1) : '—';
       mode.classList.toggle('on', b.mode === 'readwrite');
     } catch { /* keep last values */ }
@@ -541,20 +702,23 @@
 
   /* ---------- live canvas ---------- */
   const initCanvas = () => {
-    if (window.matchMedia('(pointer: coarse)').matches) return;
     const canvasEl = $('board');
+    const frame = $('board-frame');
     const hint = $('board-hint');
     const statsEl = $('board-stats');
-    if (!canvasEl || !hint || !statsEl) return;
+    if (!canvasEl || !frame || !hint || !statsEl) return;
     const ctx = canvasEl.getContext('2d');
     if (!ctx) return;
 
     const RELAY = '';
     const COLLECTION = 'canvas/draw';
-    const TTL = 300; // 5 minutes
+    const TTL = 900; // 15 minutes
     const MAX_POINTS = 1200;
     const MAX_PAGES = 1000;
     const STORE_ID = 'rabta.canvas.identity.v1';
+    const WORLD_SIZE = 1000;
+    const MIN_ZOOM = 0.00001;
+    const MAX_ZOOM = 128;
 
     const strokes = [];
     const owners = new Set();
@@ -563,7 +727,7 @@
     const pageEtags = new Map();
     const outbox = [];
     let posting = false;
-    let color = '#3ddc97';
+    let color = '#c56aef';
     let brush = 10;
     let active = null;
     let activePointer = null;
@@ -572,7 +736,8 @@
     let pollBusy = false;
     let historyDone = false;
     let clockOffset = 0;
-    let viewScale = 1, viewOx = 0, viewOy = 0;
+    let viewScale = 1, viewOx = 0, viewOy = 0, cameraScale = 1, pixelRatio = 1;
+    let zoom = 1, panX = 0, panY = 0, moveMode = false, activePan = null;
 
     const now = () => Math.floor(Date.now() / 1000) + clockOffset;
     const syncClock = (res) => {
@@ -640,9 +805,11 @@
       hint.style.display = 'flex';
       hint.textContent = !historyDone
         ? 'Loading signed strokes…'
-        : canSign
-          ? 'Drag to paint — every stroke is signed with your key.'
-          : 'Signing unavailable here — watching live strokes only.';
+        : moveMode
+          ? 'Move mode — drag to pan; use wheel or buttons to zoom.'
+          : canSign
+            ? 'Drag to paint — every stroke is signed with your key.'
+            : 'Signing unavailable here — watching live strokes only.';
     };
 
     const drawStroke = (stroke, preview) => {
@@ -701,9 +868,49 @@
       ctx.save();
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
-      ctx.restore();
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvasEl.width, canvasEl.height);
+      ctx.setTransform(viewScale, 0, 0, viewScale, viewOx, viewOy);
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, WORLD_SIZE, WORLD_SIZE);
+      ctx.strokeStyle = '#edf0e9';
+      ctx.lineWidth = 1 / Math.max(viewScale, 0.0001);
+      ctx.beginPath();
+      for (let tick = 0; tick <= WORLD_SIZE; tick += 50) {
+        ctx.moveTo(tick, 0);
+        ctx.lineTo(tick, WORLD_SIZE);
+        ctx.moveTo(0, tick);
+        ctx.lineTo(WORLD_SIZE, tick);
+      }
+      ctx.stroke();
+      ctx.strokeStyle = '#687063';
+      ctx.lineWidth = 2 / Math.max(viewScale, 0.0001);
+      ctx.strokeRect(0, 0, WORLD_SIZE, WORLD_SIZE);
+      ctx.beginPath();
+      ctx.moveTo(0, 0); ctx.lineTo(WORLD_SIZE, 0);
+      ctx.moveTo(0, 0); ctx.lineTo(0, WORLD_SIZE);
+      ctx.stroke();
       for (let i = 0; i < strokes.length; i++) drawStroke(strokes[i], false);
       if (active) drawStroke(active, true);
+      ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      ctx.fillStyle = '#73786e';
+      ctx.font = '10px ui-monospace, monospace';
+      if (cameraScale * WORLD_SIZE > 180) {
+        for (let tick = 0; tick <= WORLD_SIZE; tick += 250) {
+          const x = (viewOx + tick * viewScale) / pixelRatio;
+          const y = (viewOy + tick * viewScale) / pixelRatio;
+          if (x >= 2 && x <= frame.clientWidth - 20) {
+            ctx.fillText(String(tick), x + 3, Math.max(11, Math.min(frame.clientHeight - 4, (viewOy + WORLD_SIZE * viewScale) / pixelRatio - 5)));
+          }
+          if (y >= 11 && y <= frame.clientHeight - 4) {
+            ctx.fillText(String(tick), Math.max(2, Math.min(frame.clientWidth - 28, (viewOx + 5) / pixelRatio)), y - 3);
+          }
+        }
+        ctx.fillStyle = '#454a42';
+        ctx.fillText('X', Math.max(4, Math.min(frame.clientWidth - 12, (viewOx + WORLD_SIZE * viewScale) / pixelRatio - 12)), Math.max(12, (viewOy + 14 * viewScale) / pixelRatio));
+        ctx.fillText('Y', Math.max(2, (viewOx + 5) / pixelRatio), Math.max(11, Math.min(frame.clientHeight - 3, (viewOy + WORLD_SIZE * viewScale) / pixelRatio - 9)));
+      }
+      ctx.restore();
     };
     const scheduleRedraw = () => {
       if (redrawQueued) return;
@@ -712,19 +919,37 @@
     };
 
     const resize = () => {
-      const w = window.innerWidth;
-      const h = window.innerHeight;
+      const w = frame.clientWidth;
+      const h = frame.clientHeight;
       if (!w || !h) return;
-      const ratio = Math.min(window.devicePixelRatio || 1, 2.5);
-      const pxW = Math.max(1, Math.round(w * ratio));
-      const pxH = Math.max(1, Math.round(h * ratio));
+      pixelRatio = Math.min(window.devicePixelRatio || 1, 2.5);
+      const pxW = Math.max(1, Math.round(w * pixelRatio));
+      const pxH = Math.max(1, Math.round(h * pixelRatio));
       if (canvasEl.width !== pxW || canvasEl.height !== pxH) { canvasEl.width = pxW; canvasEl.height = pxH; }
-      const size = Math.max(w, h);
-      viewScale = (size * ratio) / 1000;
-      viewOx = (pxW - size * ratio) / 2;
-      viewOy = (pxH - size * ratio) / 2;
+      cameraScale = Math.min(w, h) / WORLD_SIZE * zoom;
+      viewScale = cameraScale * pixelRatio;
+      viewOx = ((w - WORLD_SIZE * cameraScale) / 2 + panX) * pixelRatio;
+      viewOy = ((h - WORLD_SIZE * cameraScale) / 2 + panY) * pixelRatio;
       ctx.setTransform(viewScale, 0, 0, viewScale, viewOx, viewOy);
+      const zoomLabel = $('zoom-level');
+      if (zoomLabel) {
+        const percent = zoom * 100;
+        zoomLabel.textContent = percent >= 0.01 ? percent.toFixed(percent >= 10 ? 0 : 1) + '%' : percent.toExponential(1) + '%';
+      }
       redraw();
+    };
+
+    const zoomAt = (factor, clientX, clientY) => {
+      const rect = frame.getBoundingClientRect();
+      const x = clientX == null ? rect.width / 2 : clientX - rect.left;
+      const y = clientY == null ? rect.height / 2 : clientY - rect.top;
+      const worldX = (x - ((rect.width - WORLD_SIZE * cameraScale) / 2 + panX)) / cameraScale;
+      const worldY = (y - ((rect.height - WORLD_SIZE * cameraScale) / 2 + panY)) / cameraScale;
+      zoom = clampN(zoom * factor, MIN_ZOOM, MAX_ZOOM);
+      cameraScale = Math.min(rect.width, rect.height) / WORLD_SIZE * zoom;
+      panX = x - (rect.width - WORLD_SIZE * cameraScale) / 2 - worldX * cameraScale;
+      panY = y - (rect.height - WORLD_SIZE * cameraScale) / 2 - worldY * cameraScale;
+      resize();
     };
 
     const addStroke = (stroke) => {
@@ -823,7 +1048,7 @@
           const lastExp = last
             ? (Number.isFinite(Number(last.expires_at)) ? Number(last.expires_at) : (Number(last.created_at) || 0) + TTL)
             : 0;
-          if (!cursor || pages >= MAX_PAGES || collected.length >= 1500 || (pageEvents.length > 0 && lastExp <= now())) break;
+          if (!cursor || pages >= MAX_PAGES || collected.length >= 4500 || (pageEvents.length > 0 && lastExp <= now())) break;
         } while (true);
         collected.sort(compareEvents);
         for (const event of collected) addEvent(event);
@@ -967,27 +1192,41 @@
       }
     };
 
-    const canvasPoint = (event) => {
-      const rect = canvasEl.getBoundingClientRect();
-      const w = rect.width || window.innerWidth;
-      const h = rect.height || window.innerHeight;
-      const size = Math.max(w, h);
-      const ox = (w - size) / 2;
-      const oy = (h - size) / 2;
-      const x = ((event.clientX - rect.left - ox) / size) * 1000;
-      const y = ((event.clientY - rect.top - oy) / size) * 1000;
-      return [clampN(x, 0, 1000), clampN(y, 0, 1000)];
+    const canvasPoint = (event, keepInside = true) => {
+      const rect = frame.getBoundingClientRect();
+      const x = (event.clientX - rect.left - ((rect.width - WORLD_SIZE * cameraScale) / 2 + panX)) / cameraScale;
+      const y = (event.clientY - rect.top - ((rect.height - WORLD_SIZE * cameraScale) / 2 + panY)) / cameraScale;
+      return keepInside ? [clampN(x, 0, WORLD_SIZE), clampN(y, 0, WORLD_SIZE)] : [x, y];
     };
 
+    canvasEl.addEventListener('wheel', (event) => {
+      event.preventDefault();
+      zoomAt(event.deltaY < 0 ? 1.2 : 1 / 1.2, event.clientX, event.clientY);
+    }, { passive: false });
+    canvasEl.addEventListener('contextmenu', (event) => event.preventDefault());
     canvasEl.addEventListener('pointerdown', (event) => {
+      if (moveMode || event.button === 1 || event.button === 2 || event.shiftKey) {
+        activePan = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, panX, panY };
+        try { canvasEl.setPointerCapture(event.pointerId); } catch {}
+        event.preventDefault();
+        return;
+      }
       if (!canSign || active) return;
       if (event.pointerType === 'mouse' && event.button !== 0) return;
+      const point = canvasPoint(event, false);
+      if (point[0] < 0 || point[0] > WORLD_SIZE || point[1] < 0 || point[1] > WORLD_SIZE) return;
       activePointer = event.pointerId;
       try { canvasEl.setPointerCapture(event.pointerId); } catch {}
-      active = { color, width: brush, points: [canvasPoint(event)] };
+      active = { color, width: brush, points: [point] };
       scheduleRedraw();
     });
     canvasEl.addEventListener('pointermove', (event) => {
+      if (activePan && event.pointerId === activePan.pointerId) {
+        panX = activePan.panX + event.clientX - activePan.x;
+        panY = activePan.panY + event.clientY - activePan.y;
+        resize();
+        return;
+      }
       if (!active || event.pointerId !== activePointer) return;
       const p = canvasPoint(event);
       const last = active.points[active.points.length - 1];
@@ -1006,8 +1245,27 @@
       if (finished.points.length) commitStroke(finished);
       else scheduleRedraw();
     };
+    const finishPan = (event) => {
+      if (!activePan || event.pointerId !== activePan.pointerId) return;
+      activePan = null;
+      try { canvasEl.releasePointerCapture(event.pointerId); } catch {}
+    };
     canvasEl.addEventListener('pointerup', finishStroke);
     canvasEl.addEventListener('pointercancel', finishStroke);
+    canvasEl.addEventListener('pointerup', finishPan);
+    canvasEl.addEventListener('pointercancel', finishPan);
+
+    $('zoom-in').addEventListener('click', () => zoomAt(1.25));
+    $('zoom-out').addEventListener('click', () => zoomAt(0.8));
+    $('zoom-fit').addEventListener('click', () => { zoom = 1; panX = 0; panY = 0; resize(); });
+    const panButton = $('board-pan');
+    panButton.addEventListener('click', () => {
+      moveMode = !moveMode;
+      panButton.setAttribute('aria-pressed', String(moveMode));
+      frame.classList.toggle('pan-mode', moveMode);
+      hint.textContent = moveMode ? 'Move mode — drag to pan the grid.' : 'Draw mode — drag to add a signed stroke.';
+      if (strokes.length) hint.style.display = 'none';
+    });
 
     const picker = $('board-color');
     const hexEl = $('board-color-hex');
@@ -1026,32 +1284,9 @@
       });
     });
 
-    const frame = $('board-frame');
-    const fsBtn = $('board-fs');
-    const isFs = () => !!(document.fullscreenElement || document.webkitFullscreenElement);
-    const syncFs = () => {
-      if (fsBtn) fsBtn.setAttribute('aria-pressed', isFs() ? 'true' : 'false');
-      requestAnimationFrame(resize);
-      setTimeout(resize, 250);
-    };
-    if (fsBtn && frame) {
-      fsBtn.addEventListener('click', () => {
-        try {
-          if (isFs()) {
-            const exit = document.exitFullscreen || document.webkitExitFullscreen;
-            if (exit) Promise.resolve(exit.call(document)).catch(() => {});
-          } else {
-            const req = frame.requestFullscreen || frame.webkitRequestFullscreen;
-            if (req) Promise.resolve(req.call(frame)).catch(() => {});
-          }
-        } catch {}
-      });
-    }
-    document.addEventListener('fullscreenchange', syncFs);
-    document.addEventListener('webkitfullscreenchange', syncFs);
-
     resize();
     window.addEventListener('resize', resize);
+    if (window.ResizeObserver) new ResizeObserver(resize).observe(frame);
     updateStats();
     updateHint();
     setInterval(() => { if (pruneExpired()) scheduleRedraw(); }, 15000);
@@ -1062,6 +1297,111 @@
   loadNode();
   initCanvas();
   setInterval(update, 5000);
+</script>
+<script>
+  (() => {
+    const copyButton = document.getElementById('node-copy');
+    const nodeId = document.getElementById('node-id');
+    if (copyButton && nodeId) {
+      copyButton.addEventListener('click', async () => {
+        const original = copyButton.textContent;
+        try {
+          await navigator.clipboard.writeText(nodeId.textContent);
+          copyButton.textContent = 'COPIED';
+        } catch {
+          const range = document.createRange();
+          range.selectNodeContents(nodeId);
+          const selection = getSelection();
+          selection.removeAllRanges();
+          selection.addRange(range);
+          copyButton.textContent = 'SELECT ID';
+        }
+        setTimeout(() => { copyButton.textContent = original; }, 1400);
+      });
+    }
+
+    const body = document.getElementById('recent-events');
+    if (!body) return;
+    let etag = null;
+    let busy = false;
+    const relativeTime = (timestamp) => {
+      const seconds = Math.max(0, Math.floor(Date.now() / 1000) - Number(timestamp || 0));
+      if (seconds < 10) return 'just now';
+      if (seconds < 60) return `${seconds}s ago`;
+      if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+      if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+      return `${Math.floor(seconds / 86400)}d ago`;
+    };
+    const shortOwner = (owner) => {
+      if (typeof owner !== 'string') return '—';
+      return owner.length > 23 ? `${owner.slice(0, 13)}…${owner.slice(-5)}` : owner;
+    };
+    const loadRecent = async () => {
+      if (busy || document.hidden) return;
+      busy = true;
+      try {
+        const headers = etag ? { 'If-None-Match': etag } : {};
+        const response = await fetch('/api/v1/events?limit=8', { cache: 'no-store', headers });
+        if (response.status === 304) return;
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        etag = response.headers.get('etag') || etag;
+        const data = await response.json();
+        const events = Array.isArray(data.events) ? data.events : [];
+        if (!events.length) {
+          const row = document.createElement('tr');
+          const cell = document.createElement('td');
+          cell.className = 'events-empty';
+          cell.colSpan = 5;
+          cell.textContent = 'No live events yet.';
+          row.appendChild(cell);
+          body.replaceChildren(row);
+          return;
+        }
+        const fragment = document.createDocumentFragment();
+        for (const event of events) {
+          const row = document.createElement('tr');
+          const created = document.createElement('td');
+          created.className = 'dim';
+          created.textContent = relativeTime(event.created_at);
+          created.title = event.created_at ? new Date(Number(event.created_at) * 1000).toISOString() : '';
+          const id = document.createElement('td');
+          const link = document.createElement('a');
+          link.href = `/api/v1/events/${encodeURIComponent(event.id)}`;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.textContent = typeof event.id === 'string' ? `${event.id.slice(0, 8)}…${event.id.slice(-6)}` : '—';
+          link.title = event.id || '';
+          id.appendChild(link);
+          const collection = document.createElement('td');
+          collection.textContent = event.collection || '—';
+          collection.title = event.collection || '';
+          const owner = document.createElement('td');
+          owner.textContent = shortOwner(event.owner);
+          owner.title = event.owner || '';
+          const blobs = document.createElement('td');
+          blobs.textContent = Array.isArray(event.blobs) ? String(event.blobs.length) : '0';
+          row.append(created, id, collection, owner, blobs);
+          fragment.appendChild(row);
+        }
+        body.replaceChildren(fragment);
+      } catch {
+        if (!body.children.length || body.textContent.includes('Loading')) {
+          const row = document.createElement('tr');
+          const cell = document.createElement('td');
+          cell.className = 'events-empty';
+          cell.colSpan = 5;
+          cell.textContent = 'Recent events are temporarily unavailable.';
+          row.appendChild(cell);
+          body.replaceChildren(row);
+        }
+      } finally {
+        busy = false;
+      }
+    };
+    loadRecent();
+    setInterval(loadRecent, 5000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) loadRecent(); });
+  })();
 </script>
 </body>
 </html>

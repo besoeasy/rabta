@@ -293,6 +293,13 @@ pub async fn node(State(n): State<AppState>) -> Json<serde_json::Value> {
                 "blob_bytes": data.7.blob_bytes,
                 "reclaimable_bytes": data.7.reclaimable_bytes(),
                 "largest_bytes": data.7.largest_footprint,
+                "largest_event": data.7.largest_event.as_ref().map(|event| json!({
+                    "id": event.id,
+                    "collection": event.collection,
+                    "envelope_bytes": event.envelope_bytes,
+                    "blob_bytes": event.blob_bytes,
+                    "reclaimable_bytes": event.reclaimable_bytes,
+                })),
             },
         },
         "upload": {
@@ -362,6 +369,7 @@ mod tests {
         assert!(body["events"]["live"].is_number());
         assert!(body["storage"]["budget_bytes"].is_number());
         assert!(body["limits"]["min_ttl_s"].is_number());
+        assert!(body["eviction"]["candidates"]["largest_event"].is_null());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
