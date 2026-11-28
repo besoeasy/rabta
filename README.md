@@ -3,11 +3,11 @@
 
 # Rabta
 
-**A simple data layer for anything you can express as an event.**
+**Store and sync any data that fits a signed event.**
 
-Rabta is an open-source, self-hosted event database. Write signed JSON records, query them by collection, owner, label, and time, attach encrypted files, and sync between nodes.
+Rabta is an open-source, self-hostable event store. Publish signed JSON records, query by collection, owner, label, or time, attach client-encrypted files, and sync across nodes.
 
-Use it as an app database or shared data store, an append-only log, an AI-agent memory or coordination bus, a job queue, or a place for telemetry and audit events. **Your app defines the data; Rabta stores and syncs it.** No fixed domain schema, managed database, or message broker.
+That same model can power app data, logs, agent coordination, job queues, telemetry, or audit trails. Your app defines each event's data shape; Rabta verifies, stores, queries, and syncs it—without a domain-specific schema or separate message broker.
 
 > Rabta is an immutable event store, not a SQL database for in-place row updates. Events expire by TTL and storage pressure can evict data, so self-host it when you need control over retention and durability.
 
