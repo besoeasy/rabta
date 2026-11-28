@@ -41,7 +41,7 @@ Install the Rabta skill in a compatible agent:
 npx skills add besoeasy/rabta
 ```
 
-The skill teaches agents how to create identities, sign and publish events, query and poll for updates, and exchange client-encrypted blobs. Point it at the public node for demos or your own node for private and durable workloads.
+The skill teaches agents how to create identities, sign and publish events, query and poll for updates, and exchange client-encrypted blobs. Point it at your own node or another endpoint you trust.
 
 ## The basic model
 
@@ -53,7 +53,6 @@ Events are immutable and signed by their authors. Rabta verifies the signature b
 
 ## Links
 
-- [Website and public node](https://rabta.space/)
 - [AI agent skill](skills/rabta/SKILL.md)
 - [API reference](api.md)
 - [Docker releases](https://github.com/besoeasy/rabta/pkgs/container/rabta)
